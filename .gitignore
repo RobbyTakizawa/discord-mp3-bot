@@ -1,8 +1,7 @@
 # Node dependencies
 node_modules/
 
-# Secrets / cookies
-cookies.txt
+# Local environment
 .env
 
 # Downloaded/generated music
@@ -12,9 +11,3 @@ music/
 # Editor temporary files
 *.swp
 *.swo
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/

@@ -2,9 +2,6 @@
 
 A small Discord soundboard bot that plays MP3 files from a local `music/` directory. The same Node.js process also serves a password-protected web panel for uploading tracks and starting or stopping playback.
 
-> [!IMPORTANT]
-> The YouTube-to-MP3 path (`!upload` and `bb.py`) is legacy, does not currently work, and is scheduled for removal. It is not part of the supported setup or workflow.
-
 ## What works
 
 - List MP3s from the `music/` directory in Discord.
@@ -29,7 +26,7 @@ The behavior decisions for the stabilization work are frozen. This is the accept
 - Uploads will reject an existing destination instead of overwriting it implicitly.
 - Every web route remains protected by Basic Auth behind HTTPS.
 - Browser actions will use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
-- The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and YouTube conversion remain out of scope.
+- The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
 Current mismatches are still documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). In particular, session movement, unified stop behavior, duplicate rejection, depth-consistent playback, graceful shutdown, and relative browser URLs are not implemented yet.
 
@@ -39,9 +36,8 @@ Current mismatches are still documented under **Current limitations and security
 | --- | --- |
 | `index.js` | Discord client, command handling, voice playback, music catalog, and Express web panel. |
 | `music/` | Runtime MP3 library. It is created automatically and ignored by Git. |
-| `bb.py` | Known-broken legacy YouTube conversion helper; planned for removal. |
 | `package.json` | Node.js dependencies and package metadata. |
-| `.gitignore` | Excludes dependencies, secrets, Python artifacts, and runtime music. |
+| `.gitignore` | Excludes dependencies, local environment configuration, and runtime music. |
 | `AGENTS.md` | Implementation context and guardrails for coding agents. |
 | `ROADMAP.md` | Prioritized stabilization plan and separate post-stabilization feature roadmap. |
 
@@ -52,8 +48,6 @@ Current mismatches are still documented under **Current limitations and security
 - A system `ffmpeg` executable available on `PATH` for MP3 transcoding.
 - A Discord application and bot token.
 - A persistent writable filesystem if uploaded music must survive restarts or deployments.
-
-The Python packages and `cookies.txt` referenced by `bb.py` are intentionally omitted here because that workflow is unsupported and slated for deletion.
 
 ## Discord bot setup
 
@@ -90,7 +84,7 @@ The Python packages and `cookies.txt` referenced by `bb.py` are intentionally om
    node index.js
    ```
 
-Never commit bot tokens, passwords, or cookies. `DISCORD_TOKEN` is required at startup. If `WEB_PASS` is missing, the bot still starts but every web-panel request returns an error.
+Never commit bot tokens or passwords. `DISCORD_TOKEN` is required at startup. If `WEB_PASS` is missing, the bot still starts but every web-panel request returns an error.
 
 ## Configuration
 
@@ -130,7 +124,6 @@ Catalog discovery only includes lowercase `.mp3` files at the root or directly i
 | `!play <name>` | Plays a root track in the caller's current voice channel. |
 | `!play <category/name>` | Plays a categorized track in the caller's current voice channel. |
 | `!stop` | Stops the shared player and destroys the connection for that Discord server. |
-| `!upload ...` | Legacy, known broken, and planned for removal. Do not rely on it. |
 
 There are currently no role or user restrictions on Discord commands.
 
@@ -177,7 +170,6 @@ Tracks live only on the local filesystem; there is no database, object storage, 
 
 This repository is an early, single-process implementation. Keep these constraints in mind before exposing it publicly:
 
-- YouTube conversion is broken and pending removal.
 - No automated tests are configured; `npm test` intentionally exits with an error.
 - The web panel expects `/discord/` reverse-proxy rewriting as described above.
 - HTTP Basic Auth must be placed behind HTTPS to protect credentials in transit.

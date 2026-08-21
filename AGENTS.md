@@ -2,9 +2,7 @@
 
 ## Purpose
 
-This repository is a small Discord MP3 soundboard. Keep its supported core focused on local MP3 storage, Discord voice playback, and the authenticated web upload/control panel.
-
-The YouTube-to-MP3 implementation is known broken and is scheduled for removal in the next task. Do not repair, expand, or treat `bb.py` or the `!upload` command as supported behavior. When removing that feature, delete its command path and helper artifacts, then update both this file and `README.md` so no stale Python, cookie, download, or conversion guidance remains.
+This repository is a small Discord MP3 soundboard. Keep its supported core focused on local MP3 storage, Discord voice playback, and the authenticated web upload/control panel. The authenticated web uploader is the only supported upload path; remote URL ingestion is outside the product scope.
 
 ## Read first
 
@@ -12,7 +10,6 @@ The YouTube-to-MP3 implementation is known broken and is scheduled for removal i
 - `ROADMAP.md` records the agreed stabilization order, target boundaries, and later product work. Roadmap items are not implemented behavior until the code and README are updated.
 - `index.js` contains the entire supported application.
 - `package.json` and `package-lock.json` are the source of truth for Node dependencies.
-- `bb.py` is legacy, broken, and pending removal.
 
 There are no hidden service layers, database migrations, test fixtures, or build system in the current repository.
 
@@ -56,7 +53,7 @@ Phase 1 behavior decisions are complete. Later implementation and tests must con
 - The web uploader rejects duplicate final destinations by default. Replacement requires a separate explicit future operation.
 - Basic Auth remains on every web route and HTTPS remains mandatory at the deployment boundary.
 - Generated form actions, control requests, and back links use relative URLs and work from both the direct Express root and a prefix-stripping `/discord/` reverse proxy.
-- Supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; no queue, simultaneous multi-guild playback, nested catalog, database, cloud storage, or YouTube conversion is introduced during stabilization.
+- Supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; no queue, simultaneous multi-guild playback, nested catalog, database, cloud storage, or remote URL ingestion is introduced during stabilization.
 
 Known current mismatches include per-guild Discord stop versus global web stop, stale connections when targets change, deeper guessed playback paths, duplicate overwrite, no graceful shutdown, and hard-coded `/discord/` browser URLs. Keep these visible until the corresponding implementation and verification are complete.
 
@@ -80,7 +77,7 @@ Every existing web route is protected by the local `basicAuth` middleware. Prese
 - The app does not import `dotenv`; a `.env` file is ignored by Git but is not loaded unless the process manager loads it.
 - Discord's privileged Message Content Intent must be enabled in the Developer Portal.
 
-Do not introduce secrets, tokens, cookies, real uploaded music, or generated media into Git.
+Do not introduce secrets, tokens, real uploaded music, or generated media into Git.
 
 ## Code conventions
 
@@ -106,7 +103,6 @@ Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while ma
 
 ## Known issues and deliberate warnings
 
-- `bb.py` and Discord `!upload` are broken legacy code pending removal.
 - `npm test` is a placeholder that always fails; there is no automated test suite.
 - Upload write paths are currently derived from untrusted form fields without adequate containment checks.
 - Uploaded files are not limited or validated beyond the browser's file-picker hint.

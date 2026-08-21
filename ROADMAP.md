@@ -2,7 +2,7 @@
 
 This document records the repository assessment performed on 2026-08-21 and the recommended order of work. It separates the stabilization required for the current soundboard from later product enhancements.
 
-The supported product remains deliberately small: local MP3 storage, Discord voice playback, and an authenticated web upload/control panel. YouTube downloading and conversion are not part of the future direction.
+The supported product remains deliberately small: local MP3 storage, Discord voice playback, and an authenticated web upload/control panel. The web uploader is the only supported ingestion path.
 
 ## Direction
 
@@ -11,7 +11,7 @@ Do not rewrite the application from scratch. The current integrations and produc
 Use a staged structural refactor instead:
 
 - Preserve the documented behavior while tests are introduced.
-- Remove the abandoned Python/YouTube path.
+- Remove the abandoned remote-media ingestion path.
 - Harden filesystem and web boundaries before adding features.
 - Extract testable modules until `index.js` is only the process bootstrap.
 - Manage playback through one explicit global voice session for the current product.
@@ -142,11 +142,11 @@ Accepted behavior checklist:
 - **Upload duplicates:** The authenticated web uploader rejects an upload whose final destination already exists. Replacement is not implicit and requires a future explicit operation.
 - **Authentication:** Basic Auth remains the temporary authentication mechanism for every panel, upload, control, and future administrative route, and the deployment boundary must provide HTTPS.
 - **Browser routing:** Generated form actions, control requests, and back links use relative URLs so the same page works both at the direct Express root and beneath the documented `/discord/` prefix-stripping reverse proxy.
-- **Supported scope:** `!help`, `!list`, `!play`, and `!stop` remain the supported Discord commands. There is no queue, database, cloud storage, arbitrary nested catalog, or supported YouTube conversion path.
+- **Supported scope:** `!help`, `!list`, `!play`, and `!stop` remain the supported Discord commands. There is no queue, database, cloud storage, arbitrary nested catalog, or remote URL ingestion path.
 
 This checklist is the target contract for subsequent implementation and tests. Phase 1 records decisions only; known mismatches in the current code remain visible in `README.md` and are addressed by later phases.
 
-### 2. Remove the abandoned feature
+### 2. Remove the abandoned feature — Complete (2026-08-21)
 
 - Remove the Discord `!upload` command.
 - Delete `bb.py`.
@@ -154,6 +154,14 @@ This checklist is the target contract for subsequent implementation and tests. P
 - Keep `!help`, README command documentation, and `AGENTS.md` synchronized.
 
 Completion condition: the authenticated web uploader is the only upload path and no stale YouTube/Python workflow remains.
+
+Completion record:
+
+- Removed the Discord `!upload` command and its child-process launch path.
+- Deleted `bb.py`; it was the only remote-media helper artifact in the repository.
+- Removed obsolete cookie and Python cache/environment ignore rules.
+- Updated `README.md` and `AGENTS.md` so the supported command list and web-only upload boundary match the code.
+- Confirmed that no package dependency changes were needed because the removed helper's dependencies were never part of the Node package manifests.
 
 ### 3. Establish the first testable boundaries
 
@@ -284,7 +292,7 @@ These are separate product improvements, not prerequisites for securing the curr
 
 ## Explicit non-goals
 
-- Restoring YouTube-to-MP3 downloading or `bb.py`
+- Adding remote URL ingestion
 - Hiding known limitations before they are fixed
 - Supporting arbitrary nested music directories without a deliberate contract change
 - Adding a database solely to reorganize the existing filesystem catalog

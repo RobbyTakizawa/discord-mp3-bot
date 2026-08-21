@@ -229,21 +229,6 @@ client.on("messageCreate", async (msg) => {
     }
   }
 
-  // UPLOAD
-  if (cmd === "upload") {
-    const name = args[0];
-    const link = args[1];
-    if (!name) return msg.reply("Usage: !upload <mp3-name> <yt-link>");
-    const { spawn } = require('child_process');
-
-    const pythonProcess = spawn('python3', ['bb.py', name, link]);
-    pythonProcess.stderr.on('data', (data) => msg.reply(`Error: ${data.toString()}`));
-    pythonProcess.on('close', (code) => {
-      if (code === 0) return msg.reply(`Success! Uploaded ${name}.`);
-      else return msg.reply(`FFmpeg failed with exit code ${code}`);
-    });
-  }
-
   // STOP
   if (cmd === "stop") {
     player.stop(true);
