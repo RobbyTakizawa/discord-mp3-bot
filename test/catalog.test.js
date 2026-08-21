@@ -47,3 +47,36 @@ test("safeResolveMp3 accepts supported identifiers and rejects unsafe depth", (t
   assert.equal(catalog.safeResolveMp3("villains/nested/hidden"), null);
   assert.equal(catalog.safeResolveMp3("villains\\boss_theme"), null);
 });
+
+test("catalog output is deterministic and continues after a category scan failure", (t) => {
+  const musicDir = fs.mkdtempSync(path.join(os.tmpdir(), "discord-mp3-catalog-order-"));
+  t.after(() => fs.rmSync(musicDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(musicDir, "zeta.mp3"), "root");
+  fs.writeFileSync(path.join(musicDir, "Alpha.mp3"), "root");
+  fs.mkdirSync(path.join(musicDir, "broken"));
+  fs.mkdirSync(path.join(musicDir, "good"));
+  fs.writeFileSync(path.join(musicDir, "good", "z-track.mp3"), "category");
+  fs.writeFileSync(path.join(musicDir, "good", "a-track.mp3"), "category");
+  const errors = [];
+  const fileSystem = {
+    ...fs,
+    readdirSync(target, options) {
+      if (target === path.join(musicDir, "broken")) throw new Error("fixture read failure");
+      return fs.readdirSync(target, options);
+    },
+  };
+
+  const catalog = createCatalog({
+    musicDir,
+    fileSystem,
+    logger: { error: (...args) => errors.push(args) },
+  });
+
+  assert.deepEqual(catalog.getCategories(), ["broken", "good"]);
+  assert.deepEqual(catalog.getMusicStructure(), {
+    uncategorized: ["Alpha", "zeta"],
+    good: ["a-track", "z-track"],
+  });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0][0], /broken/);
+});

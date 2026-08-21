@@ -8,7 +8,7 @@ This repository is a small Discord MP3 soundboard. Keep its supported core focus
 
 - `README.md` describes the user-facing setup, behavior, reverse-proxy contract, and known risks.
 - `ROADMAP.md` records the agreed stabilization order, target boundaries, and later product work. Roadmap items are not implemented behavior until the code and README are updated.
-- `index.js` composes the runtime; `config.js`, `catalog.js`, `render.js`, and `web-app.js` provide the first testable boundaries.
+- `index.js` composes the runtime; `config.js`, `catalog.js`, `discord-adapter.js`, `render.js`, and `web-app.js` provide testable boundaries.
 - `package.json` and `package-lock.json` are the source of truth for Node dependencies.
 
 There are no database migrations or build system in the current repository. Tests use temporary filesystem fixtures under `test/`.
@@ -17,7 +17,7 @@ There are no database migrations or build system in the current repository. Test
 
 One Node.js process owns all runtime behavior:
 
-- A `discord.js` client listens for `!` prefix commands and voice-state changes.
+- A `discord.js` client listens for `!` prefix commands and voice-state changes through `discord-adapter.js`.
 - A single `@discordjs/voice` audio player is shared globally.
 - `voice-session.js` owns that player, at most one connection, the active target and resource, and serialized lifecycle operations.
 - Express serves a server-rendered control panel and JSON control endpoint.
@@ -30,6 +30,8 @@ Runtime data is filesystem-only. `music/` is created at startup and ignored by G
 ## Current supported behavior contract
 
 - `!help`, `!list`, `!play`, and `!stop` are the supported Discord commands.
+- Command names are case-insensitive; Discord replies suppress mentions and reply pings, escape filesystem-derived Markdown/control characters, and chunk long catalog output to 2,000 characters.
+- Optional guild allowlists, controller-role restrictions for play/stop, and per-user cooldowns are disabled by default.
 - A Discord `!play` caller must already be in a voice channel.
 - Starting a track immediately replaces the current track.
 - A different Discord or web target moves the single global session after destroying its previous connection.
@@ -48,7 +50,7 @@ Changing any of these semantics requires corresponding README updates and focuse
 
 ## Frozen stabilization acceptance contract
 
-Phase 1 behavior decisions are complete. The Phase 5 voice-session implementation and automated tests now converge on these results; live non-production Discord verification remains required:
+Phase 1 behavior decisions are complete. The Phase 5 voice-session implementation and automated tests now converge on these results. Phase 5 was closed by owner direction on 2026-08-21 without live non-production Discord verification:
 
 - Exactly one global voice session owns the player, at most one connection, one target guild/channel, and one current resource.
 - Successful Discord or web play replaces the current resource. A different selected target destroys the old connection and moves the session so only the new connection is subscribed.
@@ -61,7 +63,7 @@ Phase 1 behavior decisions are complete. The Phase 5 voice-session implementatio
 - Generated form actions, control requests, and back links use relative URLs and work from both the direct Express root and a prefix-stripping `/discord/` reverse proxy.
 - Supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; no queue, simultaneous multi-guild playback, nested catalog, database, cloud storage, or remote URL ingestion is introduced during stabilization.
 
-The global session, unified stop paths, target movement, serialized operations, disconnect handling, and graceful shutdown wiring are implemented. Keep the outstanding live Discord verification visible until it is performed.
+The global session, unified stop paths, target movement, serialized operations, disconnect handling, and graceful shutdown wiring are implemented. Keep the outstanding live Discord verification visible as a Phase 9 release gate until it is performed; never imply that Phase 5's administrative closeout means the live checks ran.
 
 ## Web routing contract
 
@@ -83,6 +85,7 @@ All state-changing web routes also require the process-local CSRF token and pass
 - Install exact Node dependencies with `npm ci`.
 - MP3 playback expects a system `ffmpeg` executable on `PATH`.
 - Required environment variable: `DISCORD_TOKEN`.
+- Optional Discord policy variables: `DISCORD_ALLOWED_GUILD_IDS` and `DISCORD_CONTROLLER_ROLE_IDS` are comma-separated Discord IDs; `DISCORD_COMMAND_COOLDOWN_MS` defaults to `0` (disabled) and accepts integers through `3600000`.
 - Web variables: `WEB_PASS` is required for usable web routes; `WEB_USER` defaults to `uploader`; `WEB_HOST` defaults to `127.0.0.1`; `WEB_PORT` defaults to `3000`.
 - The app does not import `dotenv`; a `.env` file is ignored by Git but is not loaded unless the process manager loads it.
 - Discord's privileged Message Content Intent must be enabled in the Developer Portal.
@@ -107,7 +110,7 @@ The current web uploader should be considered trusted-network/admin-only. When t
 2. Preserve multipart limits, out-of-catalog staging, bounded FFprobe validation, and cleanup on every failure or abort path.
 3. Retain context-safe escaping, nonce-based CSP, CSRF validation, and security headers for web output and actions.
 4. Require HTTPS at the deployment boundary and retain authentication plus rate limiting for all state-changing routes.
-5. Add Discord authorization and rate limiting if the bot will be shared beyond trusted users.
+5. Configure the optional Discord guild allowlist, controller roles, and cooldown if the bot will be shared beyond trusted users.
 
 Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while making unrelated changes.
 
@@ -116,6 +119,7 @@ Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while ma
 - Web authentication is still one shared Basic Auth identity, and its process-local rate limits reset on restart.
 - Upload validation depends on the system FFprobe and FFmpeg executables; uploads fail closed when either is unavailable.
 - Categories cannot be created by the uploader; only the root and existing immediate real directories are valid targets.
+- Discord access controls and cooldowns exist but are disabled by default, so an unconfigured bot accepts supported commands from every visible user and guild.
 - The singleton player means one guild can interrupt another guild's playback.
 - An existing guild voice connection is reused without moving it to a newly requested channel.
 - Web channel selection is implicit and cache-order dependent.

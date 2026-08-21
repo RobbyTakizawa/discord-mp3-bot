@@ -27,7 +27,7 @@ Do not add a database, frontend framework, TypeScript migration, queue, cloud st
 2. **Browser defenses are in place.** Filesystem-derived output is escaped, scripts and styles use per-response CSP nonces, state changes require a CSRF token, and authentication failures plus state-changing requests have bounded in-memory rate limits.
 3. **Uploads are bounded and verified.** Multer limits multipart files, bytes, fields, field sizes, and parts. FFprobe must identify an MP3 audio stream and FFmpeg must decode a bounded sample within a shared ten-second timeout; rejected, oversized, invalid, or aborted staging files are removed.
 
-The panel still uses shared Basic Auth and should remain trusted-administrator tooling behind HTTPS. Discord authorization and stronger multi-user identity belong to later work.
+The panel still uses shared Basic Auth and should remain trusted-administrator tooling behind HTTPS. Optional Discord guild, controller-role, and cooldown policies are available, while stronger multi-user web identity belongs to later work.
 
 ### Voice lifecycle and correctness
 
@@ -42,10 +42,10 @@ The voice lifecycle is covered by fake-driven state-transition tests. Live Disco
 
 ### Structure and testability
 
-- `index.js` composes configuration, catalog access, Discord events, login, HTTP startup, and shutdown; voice lifecycle, web routes, rendering, and upload storage are independently importable boundaries.
+- `index.js` composes configuration, the Discord and web adapters, login, HTTP startup, and shutdown; command handling, voice lifecycle, catalog access, web routes, rendering, and upload storage are independently importable boundaries.
 - Importing the application no longer logs in, listens, or creates runtime directories.
-- The Node test suite covers bootstrap, catalog, voice-session transitions, authentication, rendering, routing, upload policy, validation boundaries, rate limiting, CSRF, duplicate rejection, and cleanup.
-- Command parsing still needs focused automated coverage; voice-session state transitions now have isolated fake-driven tests.
+- The Node test suite covers bootstrap, command parsing and authorization, catalog behavior, voice-session transitions, authentication, rendering, routing, upload policy, validation boundaries, rate limiting, CSRF, duplicate rejection, and cleanup.
+- Command handling and voice-session state transitions have isolated fake-driven tests.
 
 ### Dependencies and runtime
 
@@ -63,16 +63,15 @@ Dependency versions and advisories are time-sensitive. Rerun `npm outdated` and 
 
 ### Additional gaps
 
-- `!list` can exceed Discord's message-size limit.
-- Filesystem names can affect Discord Markdown or unintended mentions.
-- Catalog ordering is not deterministic, and one unreadable category can abort the remainder of a scan.
+- Discord catalog responses are chunked to the message-size limit, escape filesystem-derived Markdown, and suppress mentions.
+- Catalog output is deterministic, and a failed category scan no longer aborts readable categories.
 - Playback identifiers and upload destinations now follow the documented root/one-level catalog depth and containment rules.
-- Discord commands have no guild, role, or user authorization.
+- Discord guild allowlists, controller roles, and per-user cooldowns are optional and disabled by default.
 - Browser actions now use relative URLs and are covered at the direct root and through a prefix-stripping application mount; live reverse-proxy verification remains a release gate.
 - Basic Auth still depends on HTTPS at the deployment boundary. Authentication failure and state-changing request limits are process-local and reset on restart.
 - Startup does not coordinate Discord readiness with HTTP readiness.
 - There is no health/readiness reporting or structured operational logging.
-- Package metadata lacks useful `start` and real `test` scripts and an `engines` declaration.
+- Package metadata lacks a useful `start` script and an `engines` declaration.
 - Music backup and restore remain deployment responsibilities without a verified procedure.
 
 ## Target structure
@@ -185,7 +184,7 @@ Completion record:
 - Added HTTP tests for Basic Auth, direct-root relative browser actions, control routing, and escaped filesystem-derived labels.
 - Importing `index.js` no longer requires `DISCORD_TOKEN`, logs in to Discord, opens an HTTP listener, or creates the runtime music directory.
 
-Phase 4 completed the upload storage and browser hardening boundary. Phase 5 implementation and automated coverage are complete; its non-production live Discord checklist remains the next release gate.
+Phase 4 completed the upload storage and browser hardening boundary. Phase 5 and Phase 6 implementation plus automated coverage are complete. The unperformed live Discord checklist remains visible and is carried into the Phase 9 release gates.
 
 ### 4. Harden upload storage and web output
 
@@ -220,7 +219,7 @@ Completion record:
 
 ### 5. Introduce a voice-session controller
 
-Status: Implementation and automated tests complete (2026-08-21); live Discord verification pending
+Status: Complete by owner direction (2026-08-21); live Discord verification was not performed
 
 Create one owner for:
 
@@ -243,9 +242,11 @@ Implementation record:
 - Changed the player to stop when it has no subscriber, clear completed resources, attempt bounded recovery for disconnected connections, and clear the session after an unrecoverable disconnect or player error.
 - Added idempotent SIGINT/SIGTERM runtime cleanup that closes the web listener, clears voice state, and destroys the Discord client while attempting every cleanup step even if one fails.
 - Added fake-driven tests for initial play, same-target replacement, cross-target movement, resource failure preservation, serialization, idempotent stop, last-human departure, completion, disconnect failure, and shutdown.
-- Local syntax checks and all 27 automated tests pass. The non-production live Discord checklist has not been run in this workspace, so Phase 5 is not marked fully complete.
+- Local syntax checks and the automated suite passed. On 2026-08-21, the owner directed that Phase 5 be marked complete based on its implementation and fake-driven coverage. The non-production live Discord checklist was not run; no live result is implied, and those checks remain in the Phase 9 manual release gates.
 
 ### 6. Complete modularization and command robustness
+
+Status: Complete (2026-08-21)
 
 - Leave `index.js` as a small composition/startup file.
 - Move Discord commands and Express routes into their adapters.
@@ -260,13 +261,22 @@ Implementation record:
 
 Completion condition: changing a web route, Discord command, catalog rule, or voice rule no longer requires editing unrelated concerns in one monolithic file.
 
+Completion record:
+
+- Added `discord-adapter.js` to own command parsing, safe replies, Discord event translation, web target selection, and optional command-access policy; `index.js` now focuses on composition, startup, and shutdown.
+- Normalized supported command names case-insensitively and normalized whitespace in play identifiers while preserving the existing `!` prefix and supported command set.
+- Chunked `!list` output at Discord's 2,000-character limit, escaped filesystem-derived Markdown and control characters, and disabled parsing of mentions and reply pings on every bot command response.
+- Added optional comma-separated guild allowlists and controller-role restrictions plus a disabled-by-default per-user cooldown.
+- Sorted root tracks, categories, and category tracks deterministically and isolated category read failures so other readable categories remain available.
+- Added focused configuration, command, authorization, cooldown, output-safety, chunking, web-target, and catalog-failure tests. Local syntax checks and all 34 automated tests pass; live Discord behavior was not exercised in this workspace.
+
 ### 7. Refresh dependencies and runtime configuration
 
 - Upgrade Discord.js, `@discordjs/voice`, Multer, and safe transitive dependencies in reviewable batches.
 - Remove the redundant direct `prism-media` declaration if verification confirms it is unnecessary.
 - Evaluate `opusscript` against the native `@discordjs/opus` installation chain for this workload.
 - If native Opus remains, document the accepted residual risk and use a controlled, immutable build environment.
-- Add `engines`, `start`, and real `test` scripts.
+- Add `engines` and `start` scripts; retain the existing real `test` script.
 - Validate host, port, credentials, base path, and authorization configuration at startup.
 - Add a clear FFmpeg/Opus dependency preflight.
 - Rerun tests and the production dependency audit after every batch.

@@ -10,13 +10,14 @@ const { createRuntime } = require("../index");
 function emitMessage(client, message) {
   return new Promise((resolve, reject) => {
     const msg = {
-      author: { bot: false },
+      author: { bot: false, id: "user-a" },
+      channel: { send: () => Promise.resolve() },
       content: message.content,
       guild: message.guild,
       member: message.member,
-      reply: (text) => {
-        resolve(text);
-        return Promise.resolve(text);
+      reply: (payload) => {
+        resolve(payload.content);
+        return Promise.resolve(payload);
       },
     };
     try {
@@ -49,6 +50,9 @@ test("Discord commands and voice-state events use the shared voice session", asy
     safeResolveMp3: (name) => name === "sound" ? path.join(musicDir, "sound.mp3") : null,
   };
   const runtime = createRuntime({
+    discordAllowedGuildIds: [],
+    discordCommandCooldownMs: 0,
+    discordControllerRoleIds: [],
     musicDir,
     prefix: "!",
     webPass: "password",

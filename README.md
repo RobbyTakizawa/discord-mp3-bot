@@ -18,7 +18,7 @@ Playback is intentionally simple: one global voice session owns one audio player
 
 ## Accepted stabilization contract
 
-The behavior decisions for the stabilization work are frozen. The voice lifecycle items below are implemented and covered by local state-transition tests; later stabilization work remains tracked in the roadmap:
+The behavior decisions for the stabilization work are frozen. The voice lifecycle and command-adapter items below are implemented and covered by local tests; later stabilization work remains tracked in the roadmap:
 
 - One global voice session owns one player, at most one voice connection, one target channel, and one current track.
 - A successful Discord or web play request replaces the current track and moves that session when the selected target changes.
@@ -30,20 +30,21 @@ The behavior decisions for the stabilization work are frozen. The voice lifecycl
 - Browser actions use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
 - The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
-The remaining work and live verification gates are documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). Live Discord play, movement, stop, departure, reconnection, and shutdown still require non-production verification.
+The remaining work and live verification gates are documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). Phase 5 was closed by owner direction without performing live Discord play, movement, stop, departure, reconnection, or shutdown verification; those checks remain release gates.
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `index.js` | Discord client, command handling, process composition, and graceful shutdown wiring. |
+| `index.js` | Process composition, Discord login, HTTP startup, and graceful shutdown wiring. |
+| `discord-adapter.js` | Discord command parsing, safe replies, optional access policy, event translation, and web voice-target selection. |
 | `voice-session.js` | Serialized global ownership of the audio player, voice connection, target, resource, and lifecycle. |
 | `config.js` | Environment configuration parsing and startup validation. |
 | `catalog.js` | Music discovery and containment-checked playback identifiers. |
 | `render.js` | Escaped server-rendered control-panel HTML. |
 | `web-app.js` | Testable Express application, authentication, upload, and control routes. |
 | `upload-storage.js` | Upload naming policy, path containment, staging, FFprobe validation, and exclusive publication. |
-| `test/` | Node built-in test-runner coverage for bootstrap, catalog, voice transitions, authentication, rendering, routing, and hardened uploads. |
+| `test/` | Node built-in test-runner coverage for bootstrap, commands, configuration, catalog, voice transitions, authentication, rendering, routing, and hardened uploads. |
 | `music/` | Runtime MP3 library. It is created automatically and ignored by Git. |
 | `package.json` | Node.js dependencies and package metadata. |
 | `.gitignore` | Excludes dependencies, local environment configuration, and runtime music. |
@@ -100,6 +101,9 @@ Never commit bot tokens or passwords. `DISCORD_TOKEN` is required at startup. If
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes | None | Discord bot token used by `client.login`. |
+| `DISCORD_ALLOWED_GUILD_IDS` | No | Empty | Comma-separated Discord server IDs allowed to use commands. Empty permits every server the bot has joined. |
+| `DISCORD_CONTROLLER_ROLE_IDS` | No | Empty | Comma-separated Discord role IDs allowed to use `!play` and `!stop`. Empty permits every user. |
+| `DISCORD_COMMAND_COOLDOWN_MS` | No | `0` | Per-user delay between supported commands, from `0` through `3600000` milliseconds. `0` disables the cooldown. |
 | `WEB_PASS` | For web use | None | Password checked by HTTP Basic Auth. |
 | `WEB_USER` | No | `uploader` | HTTP Basic Auth username. |
 | `WEB_HOST` | No | `127.0.0.1` | Address on which Express listens. Use `0.0.0.0` only when container or network topology requires it, and restrict access at the deployment boundary. |
@@ -122,19 +126,19 @@ music/
 
 This produces the playable identifiers `airhorn`, `players/level_up`, and `villains/boss_theme`. The `.mp3` suffix is optional when using `!play`.
 
-Catalog discovery only includes lowercase `.mp3` files at the root or directly inside a first-level category. Deeper nesting is not shown by `!list` or the web panel. Filename matching follows the host filesystem's case-sensitivity rules.
+Catalog discovery only includes lowercase `.mp3` files at the root or directly inside a first-level category. Deeper nesting is not shown by `!list` or the web panel. Root tracks, categories, and category tracks are sorted deterministically. If one category cannot be read, it is logged and the remaining readable catalog is still returned. Filename matching follows the host filesystem's case-sensitivity rules.
 
 ## Discord commands
 
 | Command | Behavior |
 | --- | --- |
 | `!help` | Shows the supported command summary. |
-| `!list` | Lists root tracks and tracks in first-level category folders. |
+| `!list` | Lists root tracks and tracks in first-level category folders, splitting long catalogs across safe Discord-sized messages. |
 | `!play <name>` | Plays a root track in the caller's current voice channel. |
 | `!play <category/name>` | Plays a categorized track in the caller's current voice channel. |
 | `!stop` | Stops playback and destroys the single global voice connection, regardless of which Discord server started it. |
 
-There are currently no role or user restrictions on Discord commands.
+Commands are case-insensitive after the `!` prefix, and repeated whitespace in arguments is normalized. Bot replies suppress mentions and reply pings and escape filesystem-derived Markdown. Guild allowlists, controller-role restrictions for `!play` and `!stop`, and per-user cooldowns are available through the optional configuration above; all three restrictions are disabled by default.
 
 ## Web panel and reverse proxy
 
@@ -186,10 +190,10 @@ This repository is an early, single-process implementation. Keep these constrain
 - The panel uses one shared Basic Auth identity. Its failed-authentication and state-change rate limits are in memory, apply per connecting IP address, and reset when the process restarts.
 - Upload validation requires the system `ffprobe` and `ffmpeg` executables. If either is unavailable, uploads fail closed.
 - Uploads can target only the root or an existing immediate category; the panel does not create categories.
-- Discord commands have no authorization checks or rate limits.
+- Discord command allowlists, controller-role checks, and cooldowns are disabled unless configured; the default deployment therefore permits commands from every user and server the bot can see.
 - Playback is intentionally global: a play request from another guild or channel moves and replaces the current session rather than creating simultaneous playback.
 - The web player's target-channel choice depends on cache iteration order and is not user-selectable.
-- Voice lifecycle transitions are covered with fakes, but live Discord play, channel movement, reconnect behavior, last-human departure, and signal-driven shutdown have not been verified in this workspace.
+- Voice lifecycle transitions are covered with fakes, but live Discord play, channel movement, reconnect behavior, last-human departure, and signal-driven shutdown have not been verified in this workspace. Phase 5 was marked complete by owner direction without implying those checks ran.
 
 Treat the web panel as trusted-administrator tooling because it still relies on a shared Basic Auth credential. Keep it behind the documented HTTPS deployment boundary.
 

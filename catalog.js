@@ -1,14 +1,18 @@
 const fs = require("fs");
 const path = require("path");
 
-function createCatalog({ musicDir, logger = console }) {
+function createCatalog({ musicDir, logger = console, fileSystem = fs }) {
   const resolvedMusicDir = path.resolve(musicDir);
+
+  function sortedNames(entries) {
+    return entries.sort();
+  }
 
   function getCategories() {
     try {
-      return fs.readdirSync(resolvedMusicDir, { withFileTypes: true })
+      return sortedNames(fileSystem.readdirSync(resolvedMusicDir, { withFileTypes: true })
         .filter((dirent) => dirent.isDirectory())
-        .map((dirent) => dirent.name);
+        .map((dirent) => dirent.name));
     } catch (err) {
       logger.error("Error reading categories:", err);
       return [];
@@ -19,20 +23,29 @@ function createCatalog({ musicDir, logger = console }) {
     const structure = {};
 
     try {
-      const rootFiles = fs.readdirSync(resolvedMusicDir, { withFileTypes: true });
-      const uncategorized = rootFiles
+      const rootEntries = fileSystem.readdirSync(resolvedMusicDir, { withFileTypes: true });
+      const uncategorized = sortedNames(rootEntries
         .filter((dirent) => dirent.isFile() && dirent.name.endsWith(".mp3"))
-        .map((dirent) => path.basename(dirent.name, ".mp3"));
+        .map((dirent) => path.basename(dirent.name, ".mp3")));
 
       if (uncategorized.length > 0) {
         structure.uncategorized = uncategorized;
       }
 
-      for (const category of getCategories()) {
+      const categories = sortedNames(rootEntries
+        .filter((dirent) => dirent.isDirectory())
+        .map((dirent) => dirent.name));
+      for (const category of categories) {
         const categoryPath = path.join(resolvedMusicDir, category);
-        const files = fs.readdirSync(categoryPath, { withFileTypes: true })
-          .filter((dirent) => dirent.isFile() && dirent.name.endsWith(".mp3"))
-          .map((dirent) => path.basename(dirent.name, ".mp3"));
+        let files;
+        try {
+          files = sortedNames(fileSystem.readdirSync(categoryPath, { withFileTypes: true })
+            .filter((dirent) => dirent.isFile() && dirent.name.endsWith(".mp3"))
+            .map((dirent) => path.basename(dirent.name, ".mp3")));
+        } catch (err) {
+          logger.error(`Error scanning category "${category}":`, err);
+          continue;
+        }
 
         if (files.length > 0) {
           structure[category] = files;
@@ -69,10 +82,10 @@ function createCatalog({ musicDir, logger = console }) {
     const relative = path.relative(resolvedMusicDir, resolved);
 
     if (!relative || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) return null;
-    if (!fs.existsSync(resolved)) return null;
+    if (!fileSystem.existsSync(resolved)) return null;
 
     try {
-      return fs.statSync(resolved).isFile() ? resolved : null;
+      return fileSystem.statSync(resolved).isFile() ? resolved : null;
     } catch {
       return null;
     }

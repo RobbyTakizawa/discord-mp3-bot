@@ -11,6 +11,7 @@ const {
 
 const { loadConfig, validateConfig } = require("./config");
 const { createCatalog } = require("./catalog");
+const { createDiscordAdapter } = require("./discord-adapter");
 const { createWebApp } = require("./web-app");
 const { createVoiceSession } = require("./voice-session");
 
@@ -42,103 +43,23 @@ function createRuntime(config, dependencies = {}) {
     logger,
   });
 
-  async function playDiscord(msg, name) {
-    const voiceChannel = msg.member?.voice?.channel;
-    if (!voiceChannel) return msg.reply("Join a voice channel first.");
-
-    const filePath = catalog.safeResolveMp3(name);
-    if (!filePath) return msg.reply("File not found.");
-
-    try {
-      await voiceSession.play({ guild: msg.guild, channel: voiceChannel, filePath });
-      return msg.reply(`Playing ${name}`);
-    } catch (err) {
-      logger.error(err);
-      return msg.reply("Failed to play track.");
-    }
-  }
-
-  function findWebTarget() {
-    for (const [, guild] of client.guilds.cache) {
-      const voiceChannels = guild.channels.cache.filter((channel) => channel.isVoiceBased());
-      for (const [, channel] of voiceChannels) {
-        const humans = channel.members.filter((member) => !member.user.bot);
-        if (humans.size > 0) return { channel, guild };
-      }
-    }
-
-    return null;
-  }
-
-  async function playWeb(song, filePath) {
-    const target = findWebTarget();
-    if (!target) {
-      throw new Error("The bot can't play music from the website unless at least one human user is inside a Discord Voice Channel first!");
-    }
-
-    logger.log(`Web Control: Playing "${song}" in channel ${target.channel.name}`);
-    await voiceSession.play({ guild: target.guild, channel: target.channel, filePath });
-    return `Playing ${song}`;
-  }
+  const discordAdapter = dependencies.discordAdapter || createDiscordAdapter({
+    client,
+    catalog,
+    config,
+    voiceSession,
+    logger,
+  });
+  discordAdapter.attach();
 
   const app = createWebApp({
     config,
     catalog,
     logger,
-    controlHandlers: { play: playWeb, stop: () => voiceSession.stop() },
+    controlHandlers: { play: discordAdapter.playWeb, stop: discordAdapter.stopWeb },
   });
 
-  client.on("messageCreate", async (msg) => {
-    if (msg.author.bot) return;
-    if (!msg.content.startsWith(config.prefix)) return;
-
-    const [cmd, ...args] = msg.content.slice(config.prefix.length).trim().split(/\s+/);
-
-    if (cmd === "help") {
-      return msg.reply(`Commands:
-!list
-!play <category/name or name>
-!stop`);
-    }
-
-    if (cmd === "list") {
-      const structure = catalog.getMusicStructure();
-      let replyStr = "";
-
-      for (const [category, tracks] of Object.entries(structure)) {
-        replyStr += `**[${category.toUpperCase()}]**\n`;
-        tracks.forEach((track) => {
-          replyStr += `  ${category === "uncategorized" ? "" : category + "/"}${track}\n`;
-        });
-      }
-
-      return msg.reply(replyStr || "No MP3 files found.");
-    }
-
-    if (cmd === "play") {
-      const name = args.join(" ");
-      if (!name) return msg.reply("Usage: !play <name> or !play <category/name>");
-      return playDiscord(msg, name);
-    }
-
-    if (cmd === "stop") {
-      try {
-        await voiceSession.stop();
-        return msg.reply("Stopped.");
-      } catch (err) {
-        logger.error("Discord stop failed:", err);
-        return msg.reply("Failed to stop playback.");
-      }
-    }
-  });
-
-  client.on("voiceStateUpdate", (oldState) => {
-    voiceSession.handleVoiceStateUpdate(oldState).catch((err) => {
-      logger.error("Voice-state handling failed:", err);
-    });
-  });
-
-  const runtime = { app, catalog, client, config, player, voiceSession };
+  const runtime = { app, catalog, client, config, discordAdapter, player, voiceSession };
   let shutdownPromise = null;
   runtime.shutdown = () => {
     if (shutdownPromise) return shutdownPromise;
