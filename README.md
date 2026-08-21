@@ -45,7 +45,8 @@ The remaining deployment work and live verification gates are documented under *
 | `web-app.js` | Testable Express application, authentication, upload, and control routes. |
 | `upload-storage.js` | Upload naming policy, path containment, staging, FFprobe validation, and exclusive publication. |
 | `runtime-preflight.js` | Startup checks for FFmpeg, FFprobe, and the configured Opus encoder. |
-| `test/` | Node built-in test-runner coverage for bootstrap, commands, configuration, catalog, voice transitions, authentication, rendering, routing, and hardened uploads. |
+| `operational-logger.js` | Secret-conscious JSON logging for startup, shutdown, Discord readiness, and HTTP requests. |
+| `test/` | Node built-in test-runner coverage for bootstrap/readiness, structured logging, commands, configuration, catalog, voice transitions, authentication, rendering, routing, and hardened uploads. |
 | `music/` | Runtime MP3 library. It is created automatically and ignored by Git. |
 | `package.json` | Node.js dependencies and package metadata. |
 | `.gitignore` | Excludes dependencies, local environment configuration, and runtime music. |
@@ -143,25 +144,93 @@ Commands are case-insensitive after the `!` prefix, and repeated whitespace in a
 
 ## Web panel and reverse proxy
 
-The Express server implements these authenticated routes:
+The Express server implements these authenticated operator routes:
 
 - `GET /` - renders the upload and playback panel.
 - `POST /upload` - stores an uploaded MP3.
 - `POST /api/control` - starts or stops playback.
 
+It also exposes two minimal unauthenticated operational probes so a local process manager or reverse proxy can observe startup without storing the panel password:
+
+- `GET /healthz` returns `200 {"status":"ok"}` once the HTTP process is serving.
+- `GET /readyz` returns `503` until Discord login has completed and the Discord client currently reports ready, then returns `200`. It returns to `503` if Discord is disconnected or shutdown begins.
+
+Startup runs configuration and media dependency preflight first, opens HTTP second, and then attempts Discord login. This deliberately makes liveness observable while Discord connects. A Discord login rejection is logged, closes the partial runtime, and leaves the process with a failing exit status; the operator panel must not be considered ready merely because HTTP is listening.
+
 The generated browser UI uses relative URLs. This allows the same page to work at the direct Express root and when a reverse proxy exposes the app under `/discord/` and strips that prefix before forwarding requests to Express. For example, the important Nginx behavior is:
 
 ```nginx
+server_tokens off;
+
+location = /discord {
+    return 308 /discord/;
+}
+
 location /discord/ {
+    proxy_http_version 1.1;
     proxy_pass http://127.0.0.1:3000/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
 
-The application listens on loopback by default, which fits a reverse proxy running on the same host. Container deployments that need to publish the listener outside the container must set `WEB_HOST=0.0.0.0` and keep the published port private to the proxy or trusted network.
+Place this location in an HTTPS `server` block with a valid certificate and redirect plain HTTP to HTTPS. `proxy_pass` must keep its trailing slash so Nginx strips `/discord/` before forwarding. The forwarded host, client chain, and scheme preserve conventional proxy context, but the application does not trust forwarded client addresses for authorization. Its process-local request limits therefore see a same-host reverse proxy as one connecting client.
+
+The application listens on loopback by default, which fits a reverse proxy running on the same host. Container deployments that need to publish the listener outside the container must set `WEB_HOST=0.0.0.0` and keep the published port private to the proxy or trusted network. Express disables `X-Powered-By`, the recommended Nginx block disables version tokens, and every application response includes a generated `X-Request-ID` that matches its concise JSON request log. Request logs include only the ID, method, path without query parameters, status, duration, and completion outcome; they do not log authorization headers, cookies, or request bodies.
 
 Opening `http://localhost:3000/` directly now keeps upload, control, and back-link actions at the direct Express root. The same HTML also works beneath the documented `/discord/` proxy prefix.
 
 Web playback searches all connected Discord servers and selects the first voice channel containing at least one non-bot member. A user must therefore join a voice channel before pressing **Play**. The web **Stop** action clears the same global session as Discord `!stop`.
+
+## Persistent storage, backup, and restore
+
+The runtime library is the repository's `music/` directory, so a persistent disk or volume must be mounted at that exact path before the service starts. Both `music/` and `.discord-mp3-upload-staging/` must be writable only by the service account. For the current EC2 layout, verify the real service user and repository path first; the example below uses `ec2-user` and `/home/ec2-user/discord-mp3-bot`:
+
+```sh
+BOT_DIR=/home/ec2-user/discord-mp3-bot
+BOT_USER=ec2-user
+sudo install -d -m 0750 -o "$BOT_USER" -g "$BOT_USER" "$BOT_DIR/music"
+sudo install -d -m 0700 -o "$BOT_USER" -g "$BOT_USER" "$BOT_DIR/.discord-mp3-upload-staging"
+sudo -u "$BOT_USER" test -w "$BOT_DIR/music"
+sudo -u "$BOT_USER" test -w "$BOT_DIR/.discord-mp3-upload-staging"
+```
+
+Backups are operational, not automatic. To create an application-consistent archive, first verify that `BOT_DIR`, `music/`, and `discord-mp3-bot.service` are the intended targets, then stop only this bot for the short archive window:
+
+```sh
+BOT_DIR=/home/ec2-user/discord-mp3-bot
+BACKUP_DIR=/home/ec2-user/discord-mp3-backups
+BOT_USER=ec2-user
+BACKUP_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+sudo install -d -m 0700 -o "$BOT_USER" -g "$BOT_USER" "$BACKUP_DIR"
+sudo systemctl stop discord-mp3-bot.service
+sudo -u "$BOT_USER" tar -C "$BOT_DIR" -czf "$BACKUP_DIR/music-$BACKUP_STAMP.tar.gz" music
+sudo -u "$BOT_USER" sha256sum "$BACKUP_DIR/music-$BACKUP_STAMP.tar.gz" | sudo -u "$BOT_USER" tee "$BACKUP_DIR/music-$BACKUP_STAMP.tar.gz.sha256"
+sudo systemctl start discord-mp3-bot.service
+curl --fail --silent http://127.0.0.1:3000/healthz
+curl --fail --silent http://127.0.0.1:3000/readyz
+```
+
+Copy both archive and checksum to storage outside the host. A restore is intentionally offline and preserves the current library as a rollback directory. Set `RESTORE_ARCHIVE` to the chosen verified archive; the example assumes an ordinary same-filesystem `music/` directory. A separately mounted volume must use that volume provider's documented snapshot restore instead of renaming the mount point.
+
+```sh
+BOT_DIR=/home/ec2-user/discord-mp3-bot
+BACKUP_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+RESTORE_ARCHIVE=/home/ec2-user/discord-mp3-backups/music-YYYYMMDDTHHMMSSZ.tar.gz
+RESTORE_DIR=$(mktemp -d "$BOT_DIR/.music-restore.XXXXXX")
+sha256sum --check "$RESTORE_ARCHIVE.sha256"
+tar -C "$RESTORE_DIR" -xzf "$RESTORE_ARCHIVE"
+test -d "$RESTORE_DIR/music"
+sudo systemctl stop discord-mp3-bot.service
+mv "$BOT_DIR/music" "$BOT_DIR/music.before-$BACKUP_STAMP"
+mv "$RESTORE_DIR/music" "$BOT_DIR/music"
+sudo systemctl start discord-mp3-bot.service
+curl --fail --silent http://127.0.0.1:3000/healthz
+curl --fail --silent http://127.0.0.1:3000/readyz
+```
+
+If post-restore checks fail, stop only `discord-mp3-bot.service`, move the restored `music/` aside, move `music.before-$BACKUP_STAMP` back to `music/`, restart the bot, and repeat both probes. Do not remove either copy until playback and catalog checks pass.
 
 ## Runtime workflows
 
@@ -181,14 +250,14 @@ Web playback searches all connected Discord servers and selects the first voice 
 5. FFprobe must identify an MP3 audio stream, then FFmpeg decodes up to the first 30 seconds. Both checks share a ten-second timeout. A valid file is published without overwriting any existing destination; invalid, duplicate, oversized, failed, and aborted uploads are removed from staging.
 6. The catalog is rebuilt from disk on the next page load or `!list` command.
 
-Tracks live only on the local filesystem; there is no database, object storage, metadata store, or backup process.
+Tracks live only on the local filesystem; there is no database, object storage, metadata store, or automated backup process.
 
 ## Current limitations and security notes
 
 This repository is an early, single-process implementation. Keep these constraints in mind before exposing it publicly:
 
 - HTTP Basic Auth must be placed behind HTTPS to protect credentials in transit.
-- The panel uses one shared Basic Auth identity. Its failed-authentication and state-change rate limits are in memory, apply per connecting IP address, and reset when the process restarts.
+- The panel uses one shared Basic Auth identity. Its failed-authentication and state-change rate limits are in memory, apply per connecting socket address, and reset when the process restarts. Users behind the same reverse proxy share one limit bucket.
 - Startup requires working system `ffprobe` and `ffmpeg` executables and a loadable Opus encoder. The process exits before Discord login or HTTP listening if any dependency is unavailable.
 - Voice encoding uses the supported pure-JavaScript `opusscript` fallback. It avoids the native module's downloader/build chain and is adequate for this single-stream bot, but it is slower than native `@discordjs/opus` and should be reconsidered if playback becomes CPU-constrained.
 - Uploads can target only the root or an existing immediate category; the panel does not create categories.

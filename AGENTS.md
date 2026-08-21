@@ -24,6 +24,7 @@ One Node.js process owns all runtime behavior:
 - Multer stages bounded uploads in `.discord-mp3-upload-staging/`; `upload-storage.js` validates and exclusively publishes them into the local `music/` tree.
 - Catalog functions in `catalog.js` rescan the filesystem synchronously when requested.
 - `web-app.js` constructs the Express application without listening; `runtime-preflight.js` checks FFmpeg, FFprobe, and Opus; `index.js` owns process startup and Discord login.
+- `operational-logger.js` emits concise JSON lifecycle and request events while omitting secret-named fields. Each HTTP response receives a generated request ID; request logs do not include query strings, credentials, cookies, or bodies.
 
 Runtime data is filesystem-only. `music/` is created at startup and ignored by Git. There is no queue, database, cloud storage, or per-guild player state.
 
@@ -69,13 +70,13 @@ The global session, unified stop paths, target movement, serialized operations, 
 
 The generated HTML now uses relative URLs, so the panel actions work at the direct Express root and beneath the `/discord/` prefix-stripping proxy.
 
-Express defines `/`, `/upload`, and `/api/control`. The generated HTML uses relative URLs, so it works at the direct root and when a reverse proxy publishes `/discord/` and strips that prefix before forwarding requests to Express.
+Express defines `/`, `/upload`, and `/api/control`. The generated HTML uses relative URLs, so it works at the direct root and when a reverse proxy publishes `/discord/` and strips that prefix before forwarding requests to Express. Minimal unauthenticated `GET /healthz` and `GET /readyz` routes are intentional operational exceptions: liveness reports HTTP availability, while readiness requires completed Discord login plus a currently ready client.
 
 Do not casually change only one side of this contract. If routing is revised, update all form actions, fetch URLs, back links, Express routes, deployment examples, and tests together.
 
 Relative browser URLs are implemented and covered by direct-root tests; the prefix-stripping proxy contract remains the deployment target for live verification.
 
-Every existing web route is protected by the local `basicAuth` middleware. Preserve authentication on any new control, upload, delete, or administrative route.
+Every operator route is protected by the local `basicAuth` middleware. Preserve authentication on any new control, upload, delete, or administrative route; health and readiness must remain minimal and disclose no configuration or secrets.
 
 All state-changing web routes also require the process-local CSRF token and pass through the in-memory mutation rate limiter. The panel uses per-response CSP nonces and restrictive security headers. Preserve these boundaries and keep generated actions relative.
 
@@ -120,12 +121,13 @@ Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while ma
 
 - Web authentication is still one shared Basic Auth identity, and its process-local rate limits reset on restart.
 - Startup depends on system FFprobe and FFmpeg executables plus the Opus encoder; the process fails before login or listening when any preflight check fails.
+- After preflight, HTTP intentionally listens before Discord login so probes can observe startup. Readiness remains false until login succeeds, and login rejection closes the partial runtime with a failing exit status.
 - Categories cannot be created by the uploader; only the root and existing immediate real directories are valid targets.
 - Discord access controls and cooldowns exist but are disabled by default, so an unconfigured bot accepts supported commands from every visible user and guild.
 - The singleton player means one guild can interrupt another guild's playback.
 - An existing guild voice connection is reused without moving it to a newly requested channel.
 - Web channel selection is implicit and cache-order dependent.
-- Temporary/runtime persistence is unmanaged; deployments must mount or back up `music/` themselves.
+- Runtime persistence remains operator-managed; deployments must mount `music/` at the repository path and follow the documented verified backup/restore procedure.
 
 Keep known limitations visible. Do not silently describe intended behavior as if it were already implemented.
 
@@ -190,6 +192,7 @@ Use a targeted manual checklist as applicable:
 - Playback starts, replacement playback works, and `!stop` disconnects.
 - The bot disconnects when the last human leaves.
 - Web routes reject missing or invalid Basic Auth.
+- `/healthz` reports HTTP liveness without authentication and `/readyz` tracks live Discord readiness.
 - Upload destinations remain inside `music/`.
 - `/discord/` proxy rewriting reaches the corresponding Express routes.
 - Web play requires a human in voice; web stop clears all connections.

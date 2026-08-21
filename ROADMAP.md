@@ -293,6 +293,8 @@ Completion record:
 
 ### 8. Stabilize startup, routing, and deployment
 
+Status: Implementation complete (2026-08-21); live production proxy and readiness verification pending
+
 - Use relative or consistently configurable browser URLs.
 - Handle Discord login rejection explicitly.
 - Define whether HTTP can serve before Discord is ready and expose readiness accurately.
@@ -302,6 +304,15 @@ Completion record:
 - Document bind host, reverse-proxy headers, HTTPS, persistent-volume ownership, backup, and restore.
 
 Completion condition: direct access and `/discord/` proxy access are both verified, startup/shutdown states are observable, and deployment assumptions are explicit.
+
+Implementation record:
+
+- Kept relative browser actions and extended direct-root plus prefix-mounted automated coverage to the new operational routes.
+- Defined startup ordering explicitly: validated preflight runs first, HTTP listens second so liveness is observable, and Discord login runs third. Readiness stays false until login succeeds and the live Discord client reports ready.
+- Added unauthenticated minimal `/healthz` and `/readyz` probes. Discord login rejection is logged, closes the partially started runtime, and produces a failing process status.
+- Added generated response/request IDs and concise JSON lifecycle/request logging that excludes query strings, request bodies, authentication headers, cookies, and secret-named fields.
+- Retained Express server-header suppression and documented Nginx version-token suppression, HTTPS termination, prefix stripping, forwarded headers, loopback binding, storage ownership, and an offline verified backup/restore workflow.
+- Local automated tests cover direct and prefix-mounted probe routing, readiness transitions, login rejection cleanup, request correlation, and secret-field omission. Live Nginx behavior, production readiness, and the documented backup/restore commands remain server-side Phase 8 completion gates and are not implied by this implementation record.
 
 ### 9. Release verification and documentation
 

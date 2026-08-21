@@ -19,6 +19,48 @@ const ALLOWED_UPLOAD_MIME_TYPES = new Set([
   "audio/x-mpeg",
 ]);
 
+function logInfo(logger, event, fields) {
+  if (typeof logger.info === "function") logger.info(event, fields);
+  else logger.log?.(event, fields);
+}
+
+function createRequestContext({
+  logger = console,
+  now = Date.now,
+  randomUUID = crypto.randomUUID,
+} = {}) {
+  return function requestContext(req, res, next) {
+    const requestId = randomUUID();
+    const startedAt = now();
+    let logged = false;
+    req.requestId = requestId;
+    res.setHeader("X-Request-ID", requestId);
+
+    const logRequest = (outcome) => {
+      if (logged) return;
+      logged = true;
+      logInfo(logger, "http_request", {
+        requestId,
+        method: req.method,
+        path: `${req.baseUrl || ""}${req.path}` || "/",
+        statusCode: res.statusCode,
+        durationMs: Math.max(0, now() - startedAt),
+        outcome,
+      });
+    };
+    res.once("finish", () => logRequest("completed"));
+    res.once("close", () => {
+      if (!res.writableEnded) logRequest("aborted");
+    });
+    next();
+  };
+}
+
+function getReadiness(runtimeState) {
+  if (typeof runtimeState?.snapshot === "function") return runtimeState.snapshot();
+  return { ready: Boolean(runtimeState?.isReady?.()) };
+}
+
 function constantTimeEqual(left, right) {
   const leftBuffer = Buffer.from(String(left));
   const rightBuffer = Buffer.from(String(right));
@@ -166,6 +208,7 @@ function createWebApp({
   validateAudio,
   csrfToken = crypto.randomBytes(32).toString("base64url"),
   rateLimitOptions = {},
+  runtimeState,
   logger = console,
 }) {
   const app = express();
@@ -189,7 +232,19 @@ function createWebApp({
 
   app.disable("x-powered-by");
   app.locals.csrfToken = csrfToken;
+  app.use(createRequestContext({ logger }));
   app.use(applySecurityHeaders);
+  app.get("/healthz", (req, res) => {
+    res.status(200).json({ status: "ok" });
+  });
+  app.get("/readyz", (req, res) => {
+    const readiness = getReadiness(runtimeState);
+    const ready = readiness.ready === true;
+    res.status(ready ? 200 : 503).json({
+      status: ready ? "ready" : "not_ready",
+      discord: readiness.discordReady ? "ready" : "not_ready",
+    });
+  });
   app.use(express.urlencoded({ extended: false, limit: "4kb", parameterLimit: 10 }));
   app.use(express.json({ limit: "4kb", strict: true }));
   app.use((req, res, next) => {
@@ -253,7 +308,7 @@ function createWebApp({
         return res.send(result || `Playing ${song}`);
       }
     } catch (err) {
-      logger.error("Web control failure:", err);
+      logger.error("web_control_failed", err, { requestId: req.requestId, action });
       return res.status(500).send("Failed to control playback.");
     }
 
@@ -275,7 +330,7 @@ function createWebApp({
       return res.status(400).send("Invalid request body.");
     }
 
-    logger.error("Web request failure:", err);
+    logger.error("web_request_failed", err, { requestId: req.requestId });
     return res.status(500).send("The request could not be completed.");
   });
 
@@ -286,6 +341,7 @@ module.exports = {
   applySecurityHeaders,
   createBasicAuth,
   createCsrfProtection,
+  createRequestContext,
   createRateLimiter,
   createUploadMiddleware,
   createWebApp,

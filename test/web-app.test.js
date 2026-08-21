@@ -34,6 +34,7 @@ function createFixtureApp(options = {}) {
   fs.writeFileSync(path.join(musicDir, "airhorn.mp3"), "original audio");
   const catalog = createCatalog({ musicDir });
   const calls = [];
+  const logger = options.logger || { error() {}, info() {}, log() {} };
   const app = createWebApp({
     config: { webUser: "uploader", webPass: "secret" },
     catalog,
@@ -45,11 +46,13 @@ function createFixtureApp(options = {}) {
       stop: async () => calls.push(["stop"]),
     },
     csrfToken: "test-csrf-token",
+    logger,
     rateLimitOptions: {
       authentication: { max: 200 },
       mutation: { max: 200 },
     },
     uploadOptions: { stagingDir, ...options.uploadOptions },
+    runtimeState: options.runtimeState,
     validateAudio: options.validateAudio || (async () => true),
   });
   return { app, calls, fixtureDir, musicDir, stagingDir };
@@ -158,6 +161,57 @@ test("web app protects every route, requires CSRF, and supports relative proxy r
   });
   assert.equal(proxiedStopResponse.status, 200);
   assert.deepEqual(fixture.calls, [["stop"], ["stop"]]);
+});
+
+test("health and readiness are minimal unauthenticated probes with correlated request logs", async (t) => {
+  let ready = false;
+  const logs = [];
+  const fixture = createFixtureApp({
+    logger: {
+      error() {},
+      info(event, fields) { logs.push({ event, ...fields }); },
+      log() {},
+    },
+    runtimeState: {
+      snapshot: () => ({ discordReady: ready, ready }),
+    },
+  });
+  t.after(() => fs.rmSync(fixture.fixtureDir, { recursive: true, force: true }));
+  const server = await startApp(fixture.app);
+  t.after(server.close);
+
+  const health = await server.request("/healthz");
+  assert.equal(health.status, 200);
+  assert.deepEqual(await health.json(), { status: "ok" });
+  assert.equal(health.headers.get("x-powered-by"), null);
+  assert.equal(health.headers.get("server"), null);
+  assert.match(health.headers.get("x-request-id"), /^[0-9a-f-]{36}$/);
+
+  const starting = await server.request("/readyz");
+  assert.equal(starting.status, 503);
+  assert.deepEqual(await starting.json(), { status: "not_ready", discord: "not_ready" });
+
+  ready = true;
+  const readyResponse = await server.request("/readyz");
+  assert.equal(readyResponse.status, 200);
+  assert.deepEqual(await readyResponse.json(), { status: "ready", discord: "ready" });
+
+  const requestLog = logs.find((entry) => entry.path === "/healthz");
+  assert.equal(requestLog.event, "http_request");
+  assert.equal(requestLog.method, "GET");
+  assert.equal(requestLog.statusCode, 200);
+  assert.equal(requestLog.requestId, health.headers.get("x-request-id"));
+  assert.equal(requestLog.outcome, "completed");
+  assert.ok(requestLog.durationMs >= 0);
+
+  const proxyApp = express();
+  proxyApp.use("/discord", fixture.app);
+  const proxyServer = await startApp(proxyApp);
+  t.after(proxyServer.close);
+  const proxiedHealth = await proxyServer.request("/discord/healthz");
+  assert.equal(proxiedHealth.status, 200);
+  assert.deepEqual(await proxiedHealth.json(), { status: "ok" });
+  assert.ok(logs.some((entry) => entry.path === "/discord/healthz"));
 });
 
 test("valid uploads publish from staging into root or an existing category", async (t) => {
@@ -278,6 +332,7 @@ test("state-changing routes are rate limited without penalizing valid authentica
     catalog: createCatalog({ musicDir: fixture.musicDir }),
     controlHandlers: { play: async () => {}, stop: async () => {} },
     csrfToken: "test-csrf-token",
+    logger: { error() {}, info() {}, log() {} },
     uploadOptions: { stagingDir: fixture.stagingDir },
     validateAudio: async () => true,
     rateLimitOptions: {
