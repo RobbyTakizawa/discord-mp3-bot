@@ -28,7 +28,7 @@ One Node.js process owns all runtime behavior:
 
 Runtime data is filesystem-only. `music/` is created at startup and ignored by Git. There is no queue, database, cloud storage, or per-guild player state.
 
-## Supported behavior contract
+## Current supported behavior contract
 
 - `!help`, `!list`, `!play`, and `!stop` are the supported Discord commands.
 - A Discord `!play` caller must already be in a voice channel.
@@ -43,11 +43,30 @@ Runtime data is filesystem-only. `music/` is created at startup and ignored by G
 
 Changing any of these semantics requires corresponding README updates and focused manual verification.
 
+## Frozen stabilization acceptance contract
+
+Phase 1 behavior decisions are complete. Later implementation and tests must converge on these results without treating them as already implemented:
+
+- Exactly one global voice session owns the player, at most one connection, one target guild/channel, and one current resource.
+- Successful Discord or web play replaces the current resource. A different selected target destroys the old connection and moves the session so only the new connection is subscribed.
+- Discord play targets the caller's voice channel and rejects callers outside voice without disturbing an active session.
+- Web play retains the temporary first-cached-voice-channel-with-a-human rule and rejects no-target requests without disturbing an active session.
+- Discord stop, web stop, last-human departure from the active channel, and graceful shutdown all clear the same global session. Stop is idempotent.
+- Discovery and playback identifiers accept only root tracks or one immediate category level, only catalog lowercase `.mp3` filenames, preserve the logical `uncategorized` label for physical root files, and remain contained beneath `music/`.
+- The web uploader rejects duplicate final destinations by default. Replacement requires a separate explicit future operation.
+- Basic Auth remains on every web route and HTTPS remains mandatory at the deployment boundary.
+- Generated form actions, control requests, and back links use relative URLs and work from both the direct Express root and a prefix-stripping `/discord/` reverse proxy.
+- Supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; no queue, simultaneous multi-guild playback, nested catalog, database, cloud storage, or YouTube conversion is introduced during stabilization.
+
+Known current mismatches include per-guild Discord stop versus global web stop, stale connections when targets change, deeper guessed playback paths, duplicate overwrite, no graceful shutdown, and hard-coded `/discord/` browser URLs. Keep these visible until the corresponding implementation and verification are complete.
+
 ## Web routing contract
 
 Express defines `/`, `/upload`, and `/api/control`. The generated HTML calls `/discord/`, `/discord/upload`, and `/discord/api/control`, assuming a reverse proxy publishes `/discord/` and strips that prefix before forwarding to Express.
 
 Do not casually change only one side of this contract. If routing is revised, update all form actions, fetch URLs, back links, Express routes, deployment examples, and tests together. Direct access to the current root port renders HTML but does not make the panel actions work without rewriting.
+
+The accepted target is relative browser URLs while retaining the same Express routes and prefix-stripping proxy deployment. Do not mark that target implemented until direct-root and `/discord/` actions are both verified.
 
 Every existing web route is protected by the local `basicAuth` middleware. Preserve authentication on any new control, upload, delete, or administrative route.
 

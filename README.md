@@ -17,6 +17,22 @@ A small Discord soundboard bot that plays MP3 files from a local `music/` direct
 
 Playback is intentionally simple: there is one shared audio player, no queue, and starting a track replaces the current track. This also means playback is global rather than independent per Discord server.
 
+## Accepted stabilization contract
+
+The behavior decisions for the stabilization work are frozen. This is the acceptance target for later code and tests, not a claim that every item is implemented yet:
+
+- One global voice session owns one player, at most one voice connection, one target channel, and one current track.
+- A successful Discord or web play request replaces the current track and moves that session when the selected target changes.
+- Discord play targets the caller's current voice channel. Web play temporarily keeps its existing first-cached-channel-with-a-human selection rule.
+- Discord stop, web stop, last-human departure, and graceful shutdown will all clear the same global session. Stopping an already stopped session will succeed harmlessly.
+- The catalog remains filesystem-only: root tracks are labeled `uncategorized`, categories are one directory deep, and only lowercase `.mp3` filenames at those depths are discoverable and playable.
+- Uploads will reject an existing destination instead of overwriting it implicitly.
+- Every web route remains protected by Basic Auth behind HTTPS.
+- Browser actions will use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
+- The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and YouTube conversion remain out of scope.
+
+Current mismatches are still documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). In particular, session movement, unified stop behavior, duplicate rejection, depth-consistent playback, graceful shutdown, and relative browser URLs are not implemented yet.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -170,7 +186,12 @@ This repository is an early, single-process implementation. Keep these constrain
 - Track and category names are interpolated into HTML without escaping.
 - Discord commands have no authorization checks or rate limits.
 - One singleton audio player is shared across every Discord server.
+- Discord stop currently destroys only the requesting guild's connection, while web stop destroys every connection; the accepted target is one unified global stop operation.
+- Existing guild connections are currently reused without moving to a newly requested voice channel.
+- Guessed playback paths can currently reach deeper files even though catalog discovery is limited to one category level.
+- Uploads currently overwrite duplicate destination names instead of rejecting them.
 - The web player's target-channel choice depends on cache iteration order and is not user-selectable.
+- Browser form, control, and back-link URLs are currently hard-coded under `/discord/`, so direct-root actions fail without equivalent rewriting.
 
 Treat the web panel as trusted-network/admin tooling until the upload paths, output escaping, limits, authorization, and deployment boundary are hardened.
 

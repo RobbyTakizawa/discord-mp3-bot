@@ -118,7 +118,7 @@ Completion record:
 
 Accepted design decision: the owner chose to keep `/discord/` internet-addressable through the HTTPS reverse proxy with Basic Auth instead of restricting it by client IP or trusted network. Phase 0 is considered complete with this explicit exception to the original network-restriction recommendation. This decision does not classify the uploader as hardened or remove the upload validation, output escaping, rate limiting, CSRF, or authentication work in later phases.
 
-### 1. Freeze the behavior decisions
+### 1. Freeze the behavior decisions — Complete (2026-08-21)
 
 - Adopt one globally active voice session for the current product.
 - Move that session when a new Discord or web target is selected.
@@ -130,6 +130,21 @@ Accepted design decision: the owner chose to keep `/discord/` internet-addressab
 - Turn these rules into an acceptance checklist before implementation changes begin.
 
 Completion condition: ambiguous behavior has an explicit expected result that tests and documentation can share.
+
+Accepted behavior checklist:
+
+- **Session ownership:** The supported product has exactly one globally active voice session: one player, at most one Discord voice connection, one target guild/channel, and one current resource. It does not support simultaneous per-guild playback.
+- **Play and move:** A successful Discord or web play request replaces the current resource. If its selected target differs from the active target, the bot moves the global session by destroying the old connection and establishing only the new one before playback continues.
+- **Discord targeting:** `!play` requires the caller to be in a voice channel and selects that channel. A caller outside voice receives a concise rejection and does not disturb the active session.
+- **Web targeting:** Until explicit target selection is added, web play selects the first cached voice channel containing a human member across all guilds. If no such channel exists, it rejects the request without disturbing the active session.
+- **Stop and departure:** Discord stop, web stop, last-human departure from the active channel, and graceful shutdown all stop the player, destroy the active connection, and clear the same global session state. Stop is idempotent when no session exists.
+- **Catalog and identifiers:** Root tracks physically remain in `music/` and appear under `uncategorized`; categories are immediate child directories; discovery and valid playback identifiers are limited to the root and one category level; only filenames ending in lowercase `.mp3` are cataloged; and playback resolution remains contained beneath `music/`.
+- **Upload duplicates:** The authenticated web uploader rejects an upload whose final destination already exists. Replacement is not implicit and requires a future explicit operation.
+- **Authentication:** Basic Auth remains the temporary authentication mechanism for every panel, upload, control, and future administrative route, and the deployment boundary must provide HTTPS.
+- **Browser routing:** Generated form actions, control requests, and back links use relative URLs so the same page works both at the direct Express root and beneath the documented `/discord/` prefix-stripping reverse proxy.
+- **Supported scope:** `!help`, `!list`, `!play`, and `!stop` remain the supported Discord commands. There is no queue, database, cloud storage, arbitrary nested catalog, or supported YouTube conversion path.
+
+This checklist is the target contract for subsequent implementation and tests. Phase 1 records decisions only; known mismatches in the current code remain visible in `README.md` and are addressed by later phases.
 
 ### 2. Remove the abandoned feature
 
