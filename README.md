@@ -27,6 +27,7 @@ Playback is intentionally simple: there is one shared audio player, no queue, an
 | `package.json` | Node.js dependencies and package metadata. |
 | `.gitignore` | Excludes dependencies, secrets, Python artifacts, and runtime music. |
 | `AGENTS.md` | Implementation context and guardrails for coding agents. |
+| `ROADMAP.md` | Prioritized stabilization plan and separate post-stabilization feature roadmap. |
 
 ## Requirements
 
@@ -168,6 +169,8 @@ This repository is an early, single-process implementation. Keep these constrain
 
 Treat the web panel as trusted-network/admin tooling until the upload paths, output escaping, limits, authorization, and deployment boundary are hardened.
 
+See [`ROADMAP.md`](ROADMAP.md) for the ordered remediation plan, target structure, release gates, and later product improvements. The roadmap is an assessment and planning document; items described there are not implemented behavior unless this README and the code say otherwise.
+
 ## Development checks
 
 There is no test suite yet. At minimum, run:
@@ -177,4 +180,3 @@ node --check index.js
 ```
 
 For behavior changes, manually verify `!list`, `!play`, `!stop`, authenticated upload, web playback, and automatic voice disconnection in a non-production Discord server. Do not use `npm test` as a success check until a real test script is added.
-

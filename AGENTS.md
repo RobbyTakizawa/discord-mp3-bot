@@ -9,6 +9,7 @@ The YouTube-to-MP3 implementation is known broken and is scheduled for removal i
 ## Read first
 
 - `README.md` describes the user-facing setup, behavior, reverse-proxy contract, and known risks.
+- `ROADMAP.md` records the agreed stabilization order, target boundaries, and later product work. Roadmap items are not implemented behavior until the code and README are updated.
 - `index.js` contains the entire supported application.
 - `package.json` and `package-lock.json` are the source of truth for Node dependencies.
 - `bb.py` is legacy, broken, and pending removal.
@@ -129,4 +130,3 @@ Until tests are added, use a targeted manual checklist as applicable:
 - Web play requires a human in voice; web stop clears all connections.
 
 If adding tests, replace the failing placeholder `npm test` script with a real non-network test command and document it in `README.md`.
-
