@@ -13,6 +13,7 @@ const { loadConfig, validateConfig } = require("./config");
 const { createCatalog } = require("./catalog");
 const { createDiscordAdapter } = require("./discord-adapter");
 const { createWebApp } = require("./web-app");
+const { runRuntimePreflight } = require("./runtime-preflight");
 const { createVoiceSession } = require("./voice-session");
 
 function createDiscordClient() {
@@ -95,6 +96,7 @@ function main() {
   let config;
   try {
     config = validateConfig(loadConfig());
+    runRuntimePreflight();
   } catch (err) {
     console.error(err.message);
     process.exitCode = 1;

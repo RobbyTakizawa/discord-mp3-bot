@@ -30,7 +30,7 @@ The behavior decisions for the stabilization work are frozen. The voice lifecycl
 - Browser actions use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
 - The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
-The remaining work and live verification gates are documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). Phase 5 was closed by owner direction without performing live Discord play, movement, stop, departure, reconnection, or shutdown verification; those checks remain release gates.
+The remaining deployment work and live verification gates are documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). Phase 5 was closed by owner direction without performing live Discord play, movement, stop, departure, reconnection, or shutdown verification; those checks remain release gates.
 
 ## Repository layout
 
@@ -44,6 +44,7 @@ The remaining work and live verification gates are documented under **Current li
 | `render.js` | Escaped server-rendered control-panel HTML. |
 | `web-app.js` | Testable Express application, authentication, upload, and control routes. |
 | `upload-storage.js` | Upload naming policy, path containment, staging, FFprobe validation, and exclusive publication. |
+| `runtime-preflight.js` | Startup checks for FFmpeg, FFprobe, and the configured Opus encoder. |
 | `test/` | Node built-in test-runner coverage for bootstrap, commands, configuration, catalog, voice transitions, authentication, rendering, routing, and hardened uploads. |
 | `music/` | Runtime MP3 library. It is created automatically and ignored by Git. |
 | `package.json` | Node.js dependencies and package metadata. |
@@ -55,7 +56,7 @@ The remaining work and live verification gates are documented under **Current li
 
 - Node.js 22.12.0 or newer. This is required by the installed `@discordjs/voice` release.
 - npm.
-- A system `ffmpeg` executable available on `PATH` for MP3 transcoding.
+- System `ffmpeg` and `ffprobe` executables available on `PATH` for playback and upload validation.
 - A Discord application and bot token.
 - A persistent writable filesystem if uploaded music must survive restarts or deployments.
 
@@ -80,7 +81,7 @@ The remaining work and live verification gates are documented under **Current li
    $env:WEB_USER = "uploader" # optional
    $env:WEB_HOST = "127.0.0.1" # optional
    $env:WEB_PORT = "3000"     # optional
-   node index.js
+   npm start
    ```
 
    Bash:
@@ -91,10 +92,10 @@ The remaining work and live verification gates are documented under **Current li
    export WEB_USER='uploader' # optional
    export WEB_HOST='127.0.0.1' # optional
    export WEB_PORT='3000'     # optional
-   node index.js
+   npm start
    ```
 
-Never commit bot tokens or passwords. `DISCORD_TOKEN` is required at startup. If `WEB_PASS` is missing, the bot still starts but every web-panel request returns an error.
+Never commit bot tokens or passwords. `DISCORD_TOKEN` and `WEB_PASS` are required at startup. Before Discord login or HTTP listening, startup also verifies the listener configuration, FFmpeg, FFprobe, and the Opus encoder and exits with an actionable error if any check fails.
 
 ## Configuration
 
@@ -104,8 +105,8 @@ Never commit bot tokens or passwords. `DISCORD_TOKEN` is required at startup. If
 | `DISCORD_ALLOWED_GUILD_IDS` | No | Empty | Comma-separated Discord server IDs allowed to use commands. Empty permits every server the bot has joined. |
 | `DISCORD_CONTROLLER_ROLE_IDS` | No | Empty | Comma-separated Discord role IDs allowed to use `!play` and `!stop`. Empty permits every user. |
 | `DISCORD_COMMAND_COOLDOWN_MS` | No | `0` | Per-user delay between supported commands, from `0` through `3600000` milliseconds. `0` disables the cooldown. |
-| `WEB_PASS` | For web use | None | Password checked by HTTP Basic Auth. |
-| `WEB_USER` | No | `uploader` | HTTP Basic Auth username. |
+| `WEB_PASS` | Yes | None | Password checked by HTTP Basic Auth. An empty value is rejected at startup. |
+| `WEB_USER` | No | `uploader` | HTTP Basic Auth username. It must be non-empty and cannot contain a colon or control character. |
 | `WEB_HOST` | No | `127.0.0.1` | Address on which Express listens. Use `0.0.0.0` only when container or network topology requires it, and restrict access at the deployment boundary. |
 | `WEB_PORT` | No | `3000` | Port on which Express listens. |
 
@@ -188,7 +189,8 @@ This repository is an early, single-process implementation. Keep these constrain
 
 - HTTP Basic Auth must be placed behind HTTPS to protect credentials in transit.
 - The panel uses one shared Basic Auth identity. Its failed-authentication and state-change rate limits are in memory, apply per connecting IP address, and reset when the process restarts.
-- Upload validation requires the system `ffprobe` and `ffmpeg` executables. If either is unavailable, uploads fail closed.
+- Startup requires working system `ffprobe` and `ffmpeg` executables and a loadable Opus encoder. The process exits before Discord login or HTTP listening if any dependency is unavailable.
+- Voice encoding uses the supported pure-JavaScript `opusscript` fallback. It avoids the native module's downloader/build chain and is adequate for this single-stream bot, but it is slower than native `@discordjs/opus` and should be reconsidered if playback becomes CPU-constrained.
 - Uploads can target only the root or an existing immediate category; the panel does not create categories.
 - Discord command allowlists, controller-role checks, and cooldowns are disabled unless configured; the default deployment therefore permits commands from every user and server the bot can see.
 - Playback is intentionally global: a play request from another guild or channel moves and replaces the current session rather than creating simultaneous playback.

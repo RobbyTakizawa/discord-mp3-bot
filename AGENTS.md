@@ -23,7 +23,7 @@ One Node.js process owns all runtime behavior:
 - Express serves a server-rendered control panel and JSON control endpoint.
 - Multer stages bounded uploads in `.discord-mp3-upload-staging/`; `upload-storage.js` validates and exclusively publishes them into the local `music/` tree.
 - Catalog functions in `catalog.js` rescan the filesystem synchronously when requested.
-- `web-app.js` constructs the Express application without listening; `index.js` owns process startup and Discord login.
+- `web-app.js` constructs the Express application without listening; `runtime-preflight.js` checks FFmpeg, FFprobe, and Opus; `index.js` owns process startup and Discord login.
 
 Runtime data is filesystem-only. `music/` is created at startup and ignored by Git. There is no queue, database, cloud storage, or per-guild player state.
 
@@ -83,10 +83,12 @@ All state-changing web routes also require the process-local CSRF token and pass
 
 - Node.js `>=22.12.0` is required by `@discordjs/voice@0.19.x`.
 - Install exact Node dependencies with `npm ci`.
-- MP3 playback expects a system `ffmpeg` executable on `PATH`.
-- Required environment variable: `DISCORD_TOKEN`.
+- Use `npm start` to run the validated entry point.
+- Startup requires working system `ffmpeg` and `ffprobe` executables on `PATH` and a loadable `opusscript` encoder.
+- Required environment variables: `DISCORD_TOKEN` and `WEB_PASS`.
 - Optional Discord policy variables: `DISCORD_ALLOWED_GUILD_IDS` and `DISCORD_CONTROLLER_ROLE_IDS` are comma-separated Discord IDs; `DISCORD_COMMAND_COOLDOWN_MS` defaults to `0` (disabled) and accepts integers through `3600000`.
-- Web variables: `WEB_PASS` is required for usable web routes; `WEB_USER` defaults to `uploader`; `WEB_HOST` defaults to `127.0.0.1`; `WEB_PORT` defaults to `3000`.
+- Web variables: `WEB_USER` defaults to `uploader`; `WEB_HOST` defaults to `127.0.0.1`; `WEB_PORT` defaults to `3000`. Invalid or empty startup values fail before login or listening.
+- The supported pure-JavaScript `opusscript` encoder is intentional for this singleton workload; it avoids the advisory-bearing native `@discordjs/opus` installation chain at the cost of lower encoding performance.
 - The app does not import `dotenv`; a `.env` file is ignored by Git but is not loaded unless the process manager loads it.
 - Discord's privileged Message Content Intent must be enabled in the Developer Portal.
 
@@ -117,7 +119,7 @@ Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while ma
 ## Known issues and deliberate warnings
 
 - Web authentication is still one shared Basic Auth identity, and its process-local rate limits reset on restart.
-- Upload validation depends on the system FFprobe and FFmpeg executables; uploads fail closed when either is unavailable.
+- Startup depends on system FFprobe and FFmpeg executables plus the Opus encoder; the process fails before login or listening when any preflight check fails.
 - Categories cannot be created by the uploader; only the root and existing immediate real directories are valid targets.
 - Discord access controls and cooldowns exist but are disabled by default, so an unconfigured bot accepts supported commands from every visible user and guild.
 - The singleton player means one guild can interrupt another guild's playback.

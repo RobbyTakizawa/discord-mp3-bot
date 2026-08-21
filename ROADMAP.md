@@ -49,17 +49,12 @@ The voice lifecycle is covered by fake-driven state-transition tests. Live Disco
 
 ### Dependencies and runtime
 
-At the time of the assessment:
-
-- `node --check index.js` passed.
-- Node.js 24.16.0 satisfied the required runtime range.
-- FFmpeg was not found in the assessment environment, so live playback could not be verified there.
-- `npm audit --omit=dev` reported 15 production-tree advisories: 1 critical, 10 high, 3 moderate, and 1 low. Some are transitive or installation-time findings rather than directly reachable application vulnerabilities.
-- Available direct upgrades included `@discordjs/voice` 0.19.2 and `discord.js` 14.27.0. Multer was upgraded separately to 2.2.0 during upload hardening.
-- The native `@discordjs/opus` installation chain had unresolved audit findings through `@discordjs/node-pre-gyp` and `tar`.
-- `prism-media` appeared redundant as a direct dependency because the application does not import it and `@discordjs/voice` already provides it.
-
-Dependency versions and advisories are time-sensitive. Rerun `npm outdated` and `npm audit --omit=dev` immediately before dependency work rather than treating this snapshot as current forever.
+- The supported runtime is explicit at Node.js `>=22.12.0`, with `start` and real `test` package scripts.
+- Direct Discord dependencies are refreshed to `@discordjs/voice` 0.19.2 and `discord.js` 14.27.0; Multer remains at 2.2.0.
+- Redundant direct `prism-media` and native `@discordjs/opus` declarations were removed. The supported pure-JavaScript `opusscript` 0.0.x fallback was selected for this single-stream bot, avoiding the native downloader/build chain at the accepted cost of lower encoding performance.
+- Safe transitive updates cleared the production-tree audit on 2026-08-21. Advisory results are time-sensitive and must still be rerun for release and future dependency work.
+- Startup validates the token, web credentials, listener host/port, Discord authorization configuration, FFmpeg, FFprobe, and Opus encoder before login or listening.
+- FFmpeg was not available in the local assessment workspace, so the real startup preflight correctly could not pass there; its behavior is covered with injected test doubles. Live playback remains unverified.
 
 ### Additional gaps
 
@@ -71,7 +66,6 @@ Dependency versions and advisories are time-sensitive. Rerun `npm outdated` and 
 - Basic Auth still depends on HTTPS at the deployment boundary. Authentication failure and state-changing request limits are process-local and reset on restart.
 - Startup does not coordinate Discord readiness with HTTP readiness.
 - There is no health/readiness reporting or structured operational logging.
-- Package metadata lacks a useful `start` script and an `engines` declaration.
 - Music backup and restore remain deployment responsibilities without a verified procedure.
 
 ## Target structure
@@ -272,6 +266,8 @@ Completion record:
 
 ### 7. Refresh dependencies and runtime configuration
 
+Status: Complete (2026-08-21)
+
 - Upgrade Discord.js, `@discordjs/voice`, Multer, and safe transitive dependencies in reviewable batches.
 - Remove the redundant direct `prism-media` declaration if verification confirms it is unnecessary.
 - Evaluate `opusscript` against the native `@discordjs/opus` installation chain for this workload.
@@ -284,6 +280,16 @@ Completion record:
 Do not use an unreviewed `npm audit fix --force` as a substitute for understanding dependency changes.
 
 Completion condition: supported versions are explicit, startup failures are actionable, direct dependencies are intentional, and remaining advisories are either resolved or documented with context.
+
+Completion record:
+
+- Refreshed `@discordjs/voice` to 0.19.2 and `discord.js` to 14.27.0, retained patched Multer 2.2.0, and applied safe transitive updates without a forced audit rewrite.
+- Removed the unused direct `prism-media` declaration and replaced native `@discordjs/opus` with the supported `opusscript` 0.0.x fallback. The pure-JavaScript encoder initialized successfully under Node.js 24.19.0; lower performance is accepted for the one-stream workload. `npm outdated` reports only `opusscript` 0.1.1; 0.0.8 is intentionally retained because `prism-media` declares the 0.0.x line as its supported optional peer and 0.1.1 produces a resolver warning.
+- Added the explicit Node.js `>=22.12.0` engine, `npm start`, and retained the real `node --test` test script.
+- Expanded startup validation for the Discord token, required web password, Basic Auth username, listener host/port, guild/role IDs, and cooldown configuration.
+- Added fail-fast FFmpeg, FFprobe, and Opus initialization checks before Discord login or HTTP listening, with focused automated coverage for success and actionable failures.
+- The production-tree audit fell from 14 findings (1 critical, 9 high, 3 moderate, 1 low) to zero on 2026-08-21 after removing the native installation chain and refreshing safe transitive packages.
+- Local syntax checks passed, all 39 automated tests passed with loopback-listener permission, the real `opusscript` encoder initialized, and `npm audit --omit=dev` reported zero findings. No live Discord playback or real FFmpeg/upload behavior was exercised in this workspace.
 
 ### 8. Stabilize startup, routing, and deployment
 
