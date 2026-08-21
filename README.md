@@ -11,6 +11,7 @@ A small Discord soundboard bot that plays MP3 files from a local `music/` direct
 - Upload MP3s through an HTTP Basic Auth-protected web panel.
 - Use the web panel to play a track in the first voice channel that contains a human user.
 - Disconnect automatically when the bot is alone in its voice channel.
+- Run a real local regression suite with `npm test`.
 
 Playback is intentionally simple: there is one shared audio player, no queue, and starting a track replaces the current track. This also means playback is global rather than independent per Discord server.
 
@@ -28,13 +29,18 @@ The behavior decisions for the stabilization work are frozen. This is the accept
 - Browser actions will use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
 - The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
-Current mismatches are still documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). In particular, session movement, unified stop behavior, duplicate rejection, depth-consistent playback, graceful shutdown, and relative browser URLs are not implemented yet.
+Current mismatches are still documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). In particular, session movement, unified stop behavior, duplicate rejection, upload hardening, and graceful shutdown are not implemented yet.
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `index.js` | Discord client, command handling, voice playback, music catalog, and Express web panel. |
+| `index.js` | Discord client, command handling, voice playback, and process composition. |
+| `config.js` | Environment configuration parsing and startup validation. |
+| `catalog.js` | Music discovery and containment-checked playback identifiers. |
+| `render.js` | Escaped server-rendered control-panel HTML. |
+| `web-app.js` | Testable Express application, authentication, upload, and control routes. |
+| `test/` | Node built-in test-runner coverage for bootstrap, catalog, authentication, rendering, and routing. |
 | `music/` | Runtime MP3 library. It is created automatically and ignored by Git. |
 | `package.json` | Node.js dependencies and package metadata. |
 | `.gitignore` | Excludes dependencies, local environment configuration, and runtime music. |
@@ -135,7 +141,7 @@ The Express server implements these authenticated routes:
 - `POST /upload` - stores an uploaded MP3.
 - `POST /api/control` - starts or stops playback.
 
-The generated browser UI deliberately calls `/discord/upload`, `/discord/api/control`, and `/discord/`. It therefore assumes a reverse proxy exposes the app under `/discord/` and strips that prefix before forwarding requests to Express. For example, the important Nginx behavior is:
+The generated browser UI uses relative URLs. This allows the same page to work at the direct Express root and when a reverse proxy exposes the app under `/discord/` and strips that prefix before forwarding requests to Express. For example, the important Nginx behavior is:
 
 ```nginx
 location /discord/ {
@@ -145,7 +151,7 @@ location /discord/ {
 
 The application listens on loopback by default, which fits a reverse proxy running on the same host. Container deployments that need to publish the listener outside the container must set `WEB_HOST=0.0.0.0` and keep the published port private to the proxy or trusted network.
 
-With the current code, opening `http://localhost:3000/` directly renders the page, but its upload and control requests target `/discord/...` and will not match the Express routes unless equivalent rewriting is present.
+Opening `http://localhost:3000/` directly now keeps upload, control, and back-link actions at the direct Express root. The same HTML also works beneath the documented `/discord/` proxy prefix.
 
 Web playback searches all connected Discord servers and selects the first voice channel containing at least one non-bot member. A user must therefore join a voice channel before pressing **Play**. The web **Stop** action stops playback and destroys all of the bot's voice connections.
 
@@ -170,20 +176,15 @@ Tracks live only on the local filesystem; there is no database, object storage, 
 
 This repository is an early, single-process implementation. Keep these constraints in mind before exposing it publicly:
 
-- No automated tests are configured; `npm test` intentionally exits with an error.
-- The web panel expects `/discord/` reverse-proxy rewriting as described above.
 - HTTP Basic Auth must be placed behind HTTPS to protect credentials in transit.
 - Upload category names and custom filenames are not safely normalized or constrained on the server.
 - Uploads have no server-side size limit, MIME validation, or MP3 content validation.
-- Track and category names are interpolated into HTML without escaping.
 - Discord commands have no authorization checks or rate limits.
 - One singleton audio player is shared across every Discord server.
 - Discord stop currently destroys only the requesting guild's connection, while web stop destroys every connection; the accepted target is one unified global stop operation.
 - Existing guild connections are currently reused without moving to a newly requested voice channel.
-- Guessed playback paths can currently reach deeper files even though catalog discovery is limited to one category level.
 - Uploads currently overwrite duplicate destination names instead of rejecting them.
 - The web player's target-channel choice depends on cache iteration order and is not user-selectable.
-- Browser form, control, and back-link URLs are currently hard-coded under `/discord/`, so direct-root actions fail without equivalent rewriting.
 
 Treat the web panel as trusted-network/admin tooling until the upload paths, output escaping, limits, authorization, and deployment boundary are hardened.
 
@@ -191,10 +192,11 @@ See [`ROADMAP.md`](ROADMAP.md) for the ordered remediation plan, target structur
 
 ## Development checks
 
-There is no test suite yet. At minimum, run:
+Run the automated checks and syntax validation:
 
 ```sh
 node --check index.js
+npm test
 ```
 
-For behavior changes, manually verify `!list`, `!play`, `!stop`, authenticated upload, web playback, and automatic voice disconnection in a non-production Discord server. Do not use `npm test` as a success check until a real test script is added.
+For behavior changes, manually verify `!list`, `!play`, `!stop`, authenticated upload, web playback, and automatic voice disconnection in a non-production Discord server.

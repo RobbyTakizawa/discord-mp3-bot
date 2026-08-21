@@ -24,7 +24,7 @@ Do not add a database, frontend framework, TypeScript migration, queue, cloud st
 ### Critical security boundaries
 
 1. **Upload destinations are not contained.** Category and custom filename fields currently influence Multer paths without server-side basename or containment validation. Traversal can create directories and write or overwrite `.mp3`-suffixed files outside `music/` wherever the process has permission.
-2. **The panel has stored-XSS paths.** Filesystem-derived categories, track names, and upload result paths are interpolated into HTML and inline JavaScript without context-appropriate escaping. URL encoding does not make inline JavaScript safe.
+2. **The panel still needs remaining browser security hardening.** Filesystem-derived labels and upload result paths are now escaped and playback controls use data attributes rather than inline handlers, but CSP, CSRF protection, and rate limiting are not implemented.
 3. **Uploads are unbounded and unverified.** There are no file-size or field-count limits, actual MP3 validation, safe staging workflow, duplicate policy, or reliable failed-upload cleanup.
 
 Until these issues are fixed, treat the panel as trusted-network administration only, keep it behind HTTPS, and do not expose it broadly to the internet.
@@ -44,9 +44,9 @@ For the current product, the recommended rule is one globally active voice sessi
 
 - `index.js` owns configuration, catalog scanning, Discord events, voice state, Express routes, upload storage, HTML rendering, login, and listening.
 - Importing the module has process side effects, which prevents isolated unit and HTTP tests.
-- `npm test` is a placeholder that intentionally fails.
+- The initial Node test suite covers bootstrap, catalog, authentication, rendering, and routing; upload, command, and voice-state behavior still need focused coverage.
 - Catalog and path behavior have no regression tests despite being security-sensitive.
-- There is no automated coverage for authentication, rendering, uploads, routing, command parsing, or voice state transitions.
+- There is not yet automated coverage for uploads, command parsing, or voice state transitions.
 
 ### Dependencies and runtime
 
@@ -67,9 +67,9 @@ Dependency versions and advisories are time-sensitive. Rerun `npm outdated` and 
 - `!list` can exceed Discord's message-size limit.
 - Filesystem names can affect Discord Markdown or unintended mentions.
 - Catalog ordering is not deterministic, and one unreadable category can abort the remainder of a scan.
-- Guessed playback paths can reach deeper files even though discovery documents only one category level.
+- Playback identifiers now follow the documented root/one-level catalog depth; upload write paths still lack equivalent validation.
 - Discord commands have no guild, role, or user authorization.
-- Generated browser actions depend on a hard-coded `/discord/` reverse-proxy arrangement and fail when the rendered page is used directly at the root port.
+- Browser actions now use relative URLs and are covered at the direct root and through a prefix-stripping application mount; live reverse-proxy verification remains a release gate.
 - Basic Auth depends on HTTPS at the deployment boundary and currently has no rate limiting or CSRF defense.
 - Startup does not coordinate Discord readiness with HTTP readiness.
 - There is no graceful shutdown, health/readiness reporting, or structured operational logging.
@@ -165,6 +165,8 @@ Completion record:
 
 ### 3. Establish the first testable boundaries
 
+Status: Complete (2026-08-21)
+
 - Replace the failing test placeholder with Node's built-in test runner.
 - Extract configuration, catalog/path handling, and web rendering first.
 - Construct the Express application without immediately listening.
@@ -175,6 +177,16 @@ Completion record:
 Initial tests should cover root tracks, one-level categories, lowercase extensions, missing tracks, traversal attempts, Basic Auth, and direct/proxied browser URLs.
 
 Completion condition: the most security-sensitive pure behavior is independently testable without Discord credentials or a network listener.
+
+Completion record:
+
+- Replaced the failing test placeholder with Node's built-in test runner (`node --test`).
+- Extracted configuration, catalog/path handling, escaped web rendering, and the Express application factory into importable modules.
+- Added temporary-filesystem tests for root and one-level catalog discovery, lowercase extensions, missing files, traversal, and depth validation.
+- Added HTTP tests for Basic Auth, direct-root relative browser actions, control routing, and escaped filesystem-derived labels.
+- Importing `index.js` no longer requires `DISCORD_TOKEN`, logs in to Discord, opens an HTTP listener, or creates the runtime music directory.
+
+Phase 4 is now the next implementation phase: harden upload storage and web output, including destination validation, limits, staged MP3 validation, duplicate rejection, CSRF/security headers, and rate limiting.
 
 ### 4. Harden upload storage and web output
 
@@ -189,7 +201,7 @@ Completion condition: the most security-sensitive pure behavior is independently
 - Atomically move valid files into place and remove partial or invalid files.
 - Reject duplicate destinations with `409 Conflict` unless replacement is an explicit future operation.
 - Upgrade Multer to a patched release.
-- Escape every rendered text and attribute context.
+- Retain context-safe escaping for every rendered text and attribute context.
 - Remove inline event handlers and introduce a restrictive Content Security Policy.
 - Add consistent errors, security headers, CSRF defense, and appropriate rate limits.
 

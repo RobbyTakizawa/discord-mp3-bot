@@ -8,10 +8,10 @@ This repository is a small Discord MP3 soundboard. Keep its supported core focus
 
 - `README.md` describes the user-facing setup, behavior, reverse-proxy contract, and known risks.
 - `ROADMAP.md` records the agreed stabilization order, target boundaries, and later product work. Roadmap items are not implemented behavior until the code and README are updated.
-- `index.js` contains the entire supported application.
+- `index.js` composes the runtime; `config.js`, `catalog.js`, `render.js`, and `web-app.js` provide the first testable boundaries.
 - `package.json` and `package-lock.json` are the source of truth for Node dependencies.
 
-There are no hidden service layers, database migrations, test fixtures, or build system in the current repository.
+There are no database migrations or build system in the current repository. Tests use temporary filesystem fixtures under `test/`.
 
 ## Architecture
 
@@ -21,7 +21,8 @@ One Node.js process owns all runtime behavior:
 - A single `@discordjs/voice` audio player is shared globally.
 - Express serves a server-rendered control panel and JSON control endpoint.
 - Multer writes uploads into the local `music/` tree.
-- Catalog functions rescan the filesystem synchronously when requested.
+- Catalog functions in `catalog.js` rescan the filesystem synchronously when requested.
+- `web-app.js` constructs the Express application without listening; `index.js` owns process startup and Discord login.
 
 Runtime data is filesystem-only. `music/` is created at startup and ignored by Git. There is no queue, database, cloud storage, or per-guild player state.
 
@@ -55,15 +56,17 @@ Phase 1 behavior decisions are complete. Later implementation and tests must con
 - Generated form actions, control requests, and back links use relative URLs and work from both the direct Express root and a prefix-stripping `/discord/` reverse proxy.
 - Supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; no queue, simultaneous multi-guild playback, nested catalog, database, cloud storage, or remote URL ingestion is introduced during stabilization.
 
-Known current mismatches include per-guild Discord stop versus global web stop, stale connections when targets change, deeper guessed playback paths, duplicate overwrite, no graceful shutdown, and hard-coded `/discord/` browser URLs. Keep these visible until the corresponding implementation and verification are complete.
+Known current mismatches include per-guild Discord stop versus global web stop, stale connections when targets change, duplicate overwrite, no graceful shutdown, and incomplete upload hardening. Keep these visible until the corresponding implementation and verification are complete.
 
 ## Web routing contract
 
-Express defines `/`, `/upload`, and `/api/control`. The generated HTML calls `/discord/`, `/discord/upload`, and `/discord/api/control`, assuming a reverse proxy publishes `/discord/` and strips that prefix before forwarding to Express.
+The generated HTML now uses relative URLs, so the panel actions work at the direct Express root and beneath the `/discord/` prefix-stripping proxy.
 
-Do not casually change only one side of this contract. If routing is revised, update all form actions, fetch URLs, back links, Express routes, deployment examples, and tests together. Direct access to the current root port renders HTML but does not make the panel actions work without rewriting.
+Express defines `/`, `/upload`, and `/api/control`. The generated HTML uses relative URLs, so it works at the direct root and when a reverse proxy publishes `/discord/` and strips that prefix before forwarding requests to Express.
 
-The accepted target is relative browser URLs while retaining the same Express routes and prefix-stripping proxy deployment. Do not mark that target implemented until direct-root and `/discord/` actions are both verified.
+Do not casually change only one side of this contract. If routing is revised, update all form actions, fetch URLs, back links, Express routes, deployment examples, and tests together.
+
+Relative browser URLs are implemented and covered by direct-root tests; the prefix-stripping proxy contract remains the deployment target for live verification.
 
 Every existing web route is protected by the local `basicAuth` middleware. Preserve authentication on any new control, upload, delete, or administrative route.
 
@@ -82,7 +85,7 @@ Do not introduce secrets, tokens, real uploaded music, or generated media into G
 ## Code conventions
 
 - The Node code uses CommonJS (`require`) and semicolons.
-- Keep configuration near the top of `index.js` and use environment variables for secrets or deploy-specific values.
+- Keep configuration parsing in `config.js` and use environment variables for secrets or deploy-specific values.
 - Prefer small named helpers for filesystem, voice, authentication, and validation behavior rather than adding more logic inside event callbacks.
 - User-facing Discord errors should be concise; log the underlying exception on the server when useful.
 - Preserve absolute, containment-checked path resolution for reads and add equivalent validation for writes.
@@ -95,7 +98,7 @@ The current web uploader should be considered trusted-network/admin-only. When t
 
 1. Constrain category and custom filename input to safe basenames and verified destinations under `music/`.
 2. Add file-size limits and server-side file/content validation.
-3. Escape track and category names before inserting them into HTML or JavaScript.
+3. Retain context-safe escaping for track and category names in HTML and JavaScript output.
 4. Require HTTPS at the deployment boundary and retain authentication for all state-changing routes.
 5. Add Discord authorization and rate limiting if the bot will be shared beyond trusted users.
 
@@ -103,10 +106,8 @@ Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while ma
 
 ## Known issues and deliberate warnings
 
-- `npm test` is a placeholder that always fails; there is no automated test suite.
 - Upload write paths are currently derived from untrusted form fields without adequate containment checks.
 - Uploaded files are not limited or validated beyond the browser's file-picker hint.
-- Generated HTML does not escape filesystem-derived labels.
 - The singleton player means one guild can interrupt another guild's playback.
 - An existing guild voice connection is reused without moving it to a newly requested channel.
 - Web channel selection is implicit and cache-order dependent.
@@ -150,7 +151,7 @@ The EC2 host is a shared production server. In addition to this Discord bot, it 
 ## Change workflow
 
 1. Inspect `git status` before editing and preserve unrelated user changes.
-2. Read the complete affected path in `index.js`; related UI, route, player, and catalog logic all live in the same file.
+2. Read the complete affected application paths; runtime composition is in `index.js`, with catalog, rendering, and web routes in their respective modules.
 3. Make the smallest coherent change and update documentation in the same patch.
 4. After every code change, review this `AGENTS.md` context and update it in the same patch whenever the change affects supported behavior, architecture, configuration, environment or deployment requirements, routes, dependencies, security boundaries, known limitations, or verification expectations. If none of that context changed, no `AGENTS.md` edit is required.
 5. Run syntax and relevant available checks.
@@ -163,9 +164,10 @@ Run at least:
 
 ```sh
 node --check index.js
+npm test
 ```
 
-Until tests are added, use a targeted manual checklist as applicable:
+Use a targeted manual checklist as applicable:
 
 - Bot fails fast with a clear message when `DISCORD_TOKEN` is absent.
 - Bot logs in and the Express listener starts with valid configuration.
@@ -178,4 +180,4 @@ Until tests are added, use a targeted manual checklist as applicable:
 - `/discord/` proxy rewriting reaches the corresponding Express routes.
 - Web play requires a human in voice; web stop clears all connections.
 
-If adding tests, replace the failing placeholder `npm test` script with a real non-network test command and document it in `README.md`.
+Keep the real non-network `npm test` command and its documented scope synchronized with the test suite.
