@@ -74,7 +74,7 @@ Express defines `/`, `/upload`, and `/api/control`. The generated HTML uses rela
 
 Do not casually change only one side of this contract. If routing is revised, update all form actions, fetch URLs, back links, Express routes, deployment examples, and tests together.
 
-Relative browser URLs are implemented and covered by direct-root tests; the prefix-stripping proxy contract remains the deployment target for live verification.
+Relative browser URLs are implemented, covered by direct-root tests, and were verified through the production prefix-stripping `/discord/` proxy on 2026-08-21.
 
 Every operator route is protected by the local `basicAuth` middleware. Preserve authentication on any new control, upload, delete, or administrative route; health and readiness must remain minimal and disclose no configuration or secrets.
 
@@ -83,6 +83,7 @@ All state-changing web routes also require the process-local CSRF token and pass
 ## Environment and toolchain
 
 - Node.js `>=22.12.0` is required by `@discordjs/voice@0.19.x`.
+- The production service was moved from its obsolete Node.js 18 pin to `/usr/bin/node-24` through a systemd drop-in during the verified 2026-08-21 deployment.
 - Install exact Node dependencies with `npm ci`.
 - Use `npm start` to run the validated entry point.
 - Startup requires working system `ffmpeg` and `ffprobe` executables on `PATH` and a loadable `opusscript` encoder.
@@ -127,7 +128,8 @@ Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while ma
 - The singleton player means one guild can interrupt another guild's playback.
 - An existing guild voice connection is reused without moving it to a newly requested channel.
 - Web channel selection is implicit and cache-order dependent.
-- Runtime persistence remains operator-managed; deployments must mount `music/` at the repository path and follow the documented verified backup/restore procedure.
+- Runtime persistence remains operator-managed; deployments must mount `music/` at the repository path and follow the documented backup/restore procedure. Phase 0 produced an off-server archive and full restore test, but the current README command sequence was not rerun when Phase 8 was closed by owner direction.
+- The production Nginx proxy still exposed its `nginx/1.28.1` version token when Phase 8 was closed by owner direction, despite the documented `server_tokens off` recommendation.
 
 Keep known limitations visible. Do not silently describe intended behavior as if it were already implemented.
 

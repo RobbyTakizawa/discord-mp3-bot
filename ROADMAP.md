@@ -54,7 +54,7 @@ The voice lifecycle is covered by fake-driven state-transition tests. Live Disco
 - Redundant direct `prism-media` and native `@discordjs/opus` declarations were removed. The supported pure-JavaScript `opusscript` 0.0.x fallback was selected for this single-stream bot, avoiding the native downloader/build chain at the accepted cost of lower encoding performance.
 - Safe transitive updates cleared the production-tree audit on 2026-08-21. Advisory results are time-sensitive and must still be rerun for release and future dependency work.
 - Startup validates the token, web credentials, listener host/port, Discord authorization configuration, FFmpeg, FFprobe, and Opus encoder before login or listening.
-- FFmpeg was not available in the local assessment workspace, so the real startup preflight correctly could not pass there; its behavior is covered with injected test doubles. Live playback remains unverified.
+- FFmpeg was not available in the local assessment workspace, so the real startup preflight correctly could not pass there; its behavior is covered with injected test doubles. The production preflight subsequently passed under Node.js 24, and a production web play/stop check succeeded. The full Phase 9 Discord voice checklist remains unverified.
 
 ### Additional gaps
 
@@ -62,11 +62,11 @@ The voice lifecycle is covered by fake-driven state-transition tests. Live Disco
 - Catalog output is deterministic, and a failed category scan no longer aborts readable categories.
 - Playback identifiers and upload destinations now follow the documented root/one-level catalog depth and containment rules.
 - Discord guild allowlists, controller roles, and per-user cooldowns are optional and disabled by default.
-- Browser actions now use relative URLs and are covered at the direct root and through a prefix-stripping application mount; live reverse-proxy verification remains a release gate.
+- Browser actions now use relative URLs and are covered at the direct root and through a prefix-stripping application mount; the live `/discord/` reverse proxy was verified on 2026-08-21.
 - Basic Auth still depends on HTTPS at the deployment boundary. Authentication failure and state-changing request limits are process-local and reset on restart.
-- Startup does not coordinate Discord readiness with HTTP readiness.
-- There is no health/readiness reporting or structured operational logging.
-- Music backup and restore remain deployment responsibilities without a verified procedure.
+- Startup ordering and readiness are explicit: HTTP exposes liveness while Discord connects, and readiness follows the live Discord client state.
+- Minimal health/readiness probes and secret-conscious structured request/lifecycle logs are implemented and verified locally and in production.
+- Music backup and restore remain operator responsibilities. Phase 0 included a verified off-server archive and full restore test; the current README command sequence was not rerun during the owner-directed Phase 8 closeout.
 
 ## Target structure
 
@@ -293,7 +293,7 @@ Completion record:
 
 ### 8. Stabilize startup, routing, and deployment
 
-Status: Implementation complete (2026-08-21); live production proxy and readiness verification pending
+Status: Complete by owner direction (2026-08-21), with accepted operational exceptions recorded below
 
 - Use relative or consistently configurable browser URLs.
 - Handle Discord login rejection explicitly.
@@ -312,7 +312,10 @@ Implementation record:
 - Added unauthenticated minimal `/healthz` and `/readyz` probes. Discord login rejection is logged, closes the partially started runtime, and produces a failing process status.
 - Added generated response/request IDs and concise JSON lifecycle/request logging that excludes query strings, request bodies, authentication headers, cookies, and secret-named fields.
 - Retained Express server-header suppression and documented Nginx version-token suppression, HTTPS termination, prefix stripping, forwarded headers, loopback binding, storage ownership, and an offline verified backup/restore workflow.
-- Local automated tests cover direct and prefix-mounted probe routing, readiness transitions, login rejection cleanup, request correlation, and secret-field omission. Live Nginx behavior, production readiness, and the documented backup/restore commands remain server-side Phase 8 completion gates and are not implied by this implementation record.
+- Local automated tests cover direct and prefix-mounted probe routing, readiness transitions, login rejection cleanup, request correlation, and secret-field omission.
+- Production was deployed at `c98cd8a` under `/usr/bin/node-24` using dependencies prepared in a resource-constrained staging worktree. A failed first restart under the former Node.js 18 runtime was rolled back before the validated Node.js 24 cutover. Nginx and the colocated book tracker remained active, and an integrity-checked application-consistent backup of the book tracker's SQLite database was created before the dependency operation.
+- Direct and HTTPS `/discord/` requests returned `200` for both `/healthz` and `/readyz`; readiness reported Discord ready across three guilds. Response request IDs matched concise JSON request logs, and the production web control successfully started playback, reached a ready voice connection, played audio, stopped the player, and destroyed the connection.
+- The owner directed Phase 8 to close without two recommended follow-ups: the production proxy still returned `Server: nginx/1.28.1` rather than applying the documented `server_tokens off`, and the current README music backup/restore command sequence was not rerun. Phase 0's verified, off-server music archive and full restore test remain the recorded recovery evidence. These exceptions are not represented as verified behavior.
 
 ### 9. Release verification and documentation
 
