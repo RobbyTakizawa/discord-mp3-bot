@@ -7,7 +7,7 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function renderControlPanel({ musicStructure, categories }) {
+function renderControlPanel({ musicStructure, categories, csrfToken = "", nonce = "" }) {
   const dropdownHtml = [
     '<option value="uncategorized">Default (Root /music)</option>',
     ...categories.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`),
@@ -15,7 +15,7 @@ function renderControlPanel({ musicStructure, categories }) {
 
   let controlPanelHtml = "";
   if (Object.keys(musicStructure).length === 0) {
-    controlPanelHtml = '<p style="color: #b9bbbe; text-align: center;">No MP3 files found.</p>';
+    controlPanelHtml = '<p class="empty-library">No MP3 files found.</p>';
   } else {
     for (const [category, tracks] of Object.entries(musicStructure)) {
       controlPanelHtml += `
@@ -44,7 +44,7 @@ function renderControlPanel({ musicStructure, categories }) {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Bot Control Panel</title>
-        <style>
+        <style nonce="${escapeHtml(nonce)}">
             body { font-family: Arial, sans-serif; background: #2f3136; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
             .container { background: #36393f; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); width: 100%; max-width: 450px; }
             h2, h3 { margin-top: 0; color: #7289da; text-align: center;}
@@ -65,12 +65,16 @@ function renderControlPanel({ musicStructure, categories }) {
             .song-name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; color: #e1e1e1; }
             .btn-play { background: #43b581; padding: 6px 12px; font-size: 13px; }
             .btn-play:hover { background: #3ca374; }
+            .empty-library { color: #b9bbbe; text-align: center; }
+            .upload-result { font-family: Arial, sans-serif; padding: 20px; background: #2f3136; color: #fff; min-height: 100vh; margin: 0; box-sizing: border-box; }
+            .back-link { color: #7289da; text-decoration: none; font-weight: bold; }
         </style>
     </head>
     <body>
         <div class="container">
             <h2>Bot Control Panel</h2>
             <form action="upload" method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}">
                 <div class="form-group">
                     <label for="mp3Name">Name the MP3 File (Optional)</label>
                     <input type="text" id="mp3Name" name="mp3Name" placeholder="e.g. airhorn (defaults to filename)">
@@ -89,12 +93,13 @@ function renderControlPanel({ musicStructure, categories }) {
             <button class="btn btn-stop js-stop">🛑 Stop All Playback</button>
             <div class="control-container">${controlPanelHtml}</div>
         </div>
-        <script>
+        <script nonce="${escapeHtml(nonce)}">
+            const csrfToken = ${JSON.stringify(csrfToken)};
             async function controlBot(action, song = '') {
                 try {
                     const response = await fetch('api/control', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
                         body: JSON.stringify({ action, song })
                     });
                     const data = await response.text();
@@ -113,12 +118,17 @@ function renderControlPanel({ musicStructure, categories }) {
   `;
 }
 
-function renderUploadSuccess(relativePath) {
+function renderUploadSuccess(relativePath, nonce = "") {
   return `
-    <div style="font-family: Arial; padding: 20px; background: #2f3136; color: #fff; height: 100vh; margin:0; box-sizing: border-box;">
+    <style nonce="${escapeHtml(nonce)}">
+      body { margin: 0; }
+      .upload-result { font-family: Arial, sans-serif; padding: 20px; background: #2f3136; color: #fff; min-height: 100vh; box-sizing: border-box; }
+      .back-link { color: #7289da; text-decoration: none; font-weight: bold; }
+    </style>
+    <div class="upload-result">
         <h3>Success!</h3>
         <p>Uploaded and saved to destination details: <strong>${escapeHtml(relativePath)}</strong></p>
-        <a href="./" style="color: #7289da; text-decoration: none; font-weight: bold;">← Back to Uploader</a>
+        <a href="./" class="back-link">← Back to Uploader</a>
     </div>
   `;
 }

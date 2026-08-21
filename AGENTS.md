@@ -20,7 +20,7 @@ One Node.js process owns all runtime behavior:
 - A `discord.js` client listens for `!` prefix commands and voice-state changes.
 - A single `@discordjs/voice` audio player is shared globally.
 - Express serves a server-rendered control panel and JSON control endpoint.
-- Multer writes uploads into the local `music/` tree.
+- Multer stages bounded uploads in `.discord-mp3-upload-staging/`; `upload-storage.js` validates and exclusively publishes them into the local `music/` tree.
 - Catalog functions in `catalog.js` rescan the filesystem synchronously when requested.
 - `web-app.js` constructs the Express application without listening; `index.js` owns process startup and Discord login.
 
@@ -35,6 +35,9 @@ Runtime data is filesystem-only. `music/` is created at startup and ignored by G
 - Categories are immediate subdirectories of `music/`; discovery does not recurse into deeper levels.
 - Only filenames ending in lowercase `.mp3` are cataloged.
 - `safeResolveMp3` must continue to prevent resolution outside `music/` for playback paths.
+- Uploads accept only `uncategorized` or an existing, real immediate category; category symlinks are rejected.
+- Upload basenames are NFC-normalized, conservatively constrained, limited to 100 characters, and published as lowercase `.mp3` filenames without overwriting duplicates.
+- Upload requests accept one file up to 25 MB, stage outside the catalog, require FFprobe identification plus a bounded FFmpeg decode sample within a shared ten-second timeout, and clean up rejected or aborted staging files.
 - The bot destroys its connection when no human members remain in its voice channel.
 - Web playback chooses the first cached voice channel with a human member across all guilds.
 - Web stop is global and destroys all voice connections.
@@ -56,7 +59,7 @@ Phase 1 behavior decisions are complete. Later implementation and tests must con
 - Generated form actions, control requests, and back links use relative URLs and work from both the direct Express root and a prefix-stripping `/discord/` reverse proxy.
 - Supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; no queue, simultaneous multi-guild playback, nested catalog, database, cloud storage, or remote URL ingestion is introduced during stabilization.
 
-Known current mismatches include per-guild Discord stop versus global web stop, stale connections when targets change, duplicate overwrite, no graceful shutdown, and incomplete upload hardening. Keep these visible until the corresponding implementation and verification are complete.
+Known current mismatches include per-guild Discord stop versus global web stop, stale connections when targets change, and no graceful shutdown. Upload hardening and duplicate rejection are implemented. Keep remaining mismatches visible until the corresponding implementation and verification are complete.
 
 ## Web routing contract
 
@@ -69,6 +72,8 @@ Do not casually change only one side of this contract. If routing is revised, up
 Relative browser URLs are implemented and covered by direct-root tests; the prefix-stripping proxy contract remains the deployment target for live verification.
 
 Every existing web route is protected by the local `basicAuth` middleware. Preserve authentication on any new control, upload, delete, or administrative route.
+
+All state-changing web routes also require the process-local CSRF token and pass through the in-memory mutation rate limiter. The panel uses per-response CSP nonces and restrictive security headers. Preserve these boundaries and keep generated actions relative.
 
 ## Environment and toolchain
 
@@ -96,18 +101,19 @@ Do not introduce secrets, tokens, real uploaded music, or generated media into G
 
 The current web uploader should be considered trusted-network/admin-only. When touching it, prioritize:
 
-1. Constrain category and custom filename input to safe basenames and verified destinations under `music/`.
-2. Add file-size limits and server-side file/content validation.
-3. Retain context-safe escaping for track and category names in HTML and JavaScript output.
-4. Require HTTPS at the deployment boundary and retain authentication for all state-changing routes.
+1. Preserve canonical containment, the basename policy, existing-category rule, symlink rejection, and exclusive duplicate-safe publication for upload writes.
+2. Preserve multipart limits, out-of-catalog staging, bounded FFprobe validation, and cleanup on every failure or abort path.
+3. Retain context-safe escaping, nonce-based CSP, CSRF validation, and security headers for web output and actions.
+4. Require HTTPS at the deployment boundary and retain authentication plus rate limiting for all state-changing routes.
 5. Add Discord authorization and rate limiting if the bot will be shared beyond trusted users.
 
 Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while making unrelated changes.
 
 ## Known issues and deliberate warnings
 
-- Upload write paths are currently derived from untrusted form fields without adequate containment checks.
-- Uploaded files are not limited or validated beyond the browser's file-picker hint.
+- Web authentication is still one shared Basic Auth identity, and its process-local rate limits reset on restart.
+- Upload validation depends on the system FFprobe and FFmpeg executables; uploads fail closed when either is unavailable.
+- Categories cannot be created by the uploader; only the root and existing immediate real directories are valid targets.
 - The singleton player means one guild can interrupt another guild's playback.
 - An existing guild voice connection is reused without moving it to a newly requested channel.
 - Web channel selection is implicit and cache-order dependent.

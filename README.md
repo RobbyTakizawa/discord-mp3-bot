@@ -9,6 +9,7 @@ A small Discord soundboard bot that plays MP3 files from a local `music/` direct
 - Stop playback and disconnect the bot.
 - Group tracks into one level of category folders.
 - Upload MP3s through an HTTP Basic Auth-protected web panel.
+- Validate bounded uploads in a private staging area and reject unsafe or duplicate destinations.
 - Use the web panel to play a track in the first voice channel that contains a human user.
 - Disconnect automatically when the bot is alone in its voice channel.
 - Run a real local regression suite with `npm test`.
@@ -24,12 +25,12 @@ The behavior decisions for the stabilization work are frozen. This is the accept
 - Discord play targets the caller's current voice channel. Web play temporarily keeps its existing first-cached-channel-with-a-human selection rule.
 - Discord stop, web stop, last-human departure, and graceful shutdown will all clear the same global session. Stopping an already stopped session will succeed harmlessly.
 - The catalog remains filesystem-only: root tracks are labeled `uncategorized`, categories are one directory deep, and only lowercase `.mp3` filenames at those depths are discoverable and playable.
-- Uploads will reject an existing destination instead of overwriting it implicitly.
+- Uploads reject an existing destination instead of overwriting it implicitly.
 - Every web route remains protected by Basic Auth behind HTTPS.
 - Browser actions will use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
 - The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
-Current mismatches are still documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). In particular, session movement, unified stop behavior, duplicate rejection, upload hardening, and graceful shutdown are not implemented yet.
+Current mismatches are still documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). In particular, session movement, unified stop behavior, and graceful shutdown are not implemented yet. Upload hardening and duplicate rejection are implemented.
 
 ## Repository layout
 
@@ -40,7 +41,8 @@ Current mismatches are still documented under **Current limitations and security
 | `catalog.js` | Music discovery and containment-checked playback identifiers. |
 | `render.js` | Escaped server-rendered control-panel HTML. |
 | `web-app.js` | Testable Express application, authentication, upload, and control routes. |
-| `test/` | Node built-in test-runner coverage for bootstrap, catalog, authentication, rendering, and routing. |
+| `upload-storage.js` | Upload naming policy, path containment, staging, FFprobe validation, and exclusive publication. |
+| `test/` | Node built-in test-runner coverage for bootstrap, catalog, authentication, rendering, routing, and hardened uploads. |
 | `music/` | Runtime MP3 library. It is created automatically and ignored by Git. |
 | `package.json` | Node.js dependencies and package metadata. |
 | `.gitignore` | Excludes dependencies, local environment configuration, and runtime music. |
@@ -167,8 +169,11 @@ Web playback searches all connected Discord servers and selects the first voice 
 ### Browser upload
 
 1. Basic Auth validates `WEB_USER` and `WEB_PASS`.
-2. Multer writes the file to `music/` or the selected category directory.
-3. The catalog is rebuilt from disk on the next page load or `!list` command.
+2. The panel supplies a CSRF token, and request limits allow one MP3 file up to 25 MB plus bounded form fields.
+3. Multer writes to a random filename in `.discord-mp3-upload-staging/`, outside the visible `music/` catalog.
+4. The server accepts only `uncategorized` or an existing immediate category. Names are Unicode-normalized and must use letters or numbers followed by letters, numbers, spaces, `_`, `-`, `.`, parentheses, or square brackets. Separators, control characters, dot segments, trailing dots, reserved Windows device names, and names longer than 100 characters are rejected.
+5. FFprobe must identify an MP3 audio stream, then FFmpeg decodes up to the first 30 seconds. Both checks share a ten-second timeout. A valid file is published without overwriting any existing destination; invalid, duplicate, oversized, failed, and aborted uploads are removed from staging.
+6. The catalog is rebuilt from disk on the next page load or `!list` command.
 
 Tracks live only on the local filesystem; there is no database, object storage, metadata store, or backup process.
 
@@ -177,16 +182,16 @@ Tracks live only on the local filesystem; there is no database, object storage, 
 This repository is an early, single-process implementation. Keep these constraints in mind before exposing it publicly:
 
 - HTTP Basic Auth must be placed behind HTTPS to protect credentials in transit.
-- Upload category names and custom filenames are not safely normalized or constrained on the server.
-- Uploads have no server-side size limit, MIME validation, or MP3 content validation.
+- The panel uses one shared Basic Auth identity. Its failed-authentication and state-change rate limits are in memory, apply per connecting IP address, and reset when the process restarts.
+- Upload validation requires the system `ffprobe` and `ffmpeg` executables. If either is unavailable, uploads fail closed.
+- Uploads can target only the root or an existing immediate category; the panel does not create categories.
 - Discord commands have no authorization checks or rate limits.
 - One singleton audio player is shared across every Discord server.
 - Discord stop currently destroys only the requesting guild's connection, while web stop destroys every connection; the accepted target is one unified global stop operation.
 - Existing guild connections are currently reused without moving to a newly requested voice channel.
-- Uploads currently overwrite duplicate destination names instead of rejecting them.
 - The web player's target-channel choice depends on cache iteration order and is not user-selectable.
 
-Treat the web panel as trusted-network/admin tooling until the upload paths, output escaping, limits, authorization, and deployment boundary are hardened.
+Treat the web panel as trusted-administrator tooling because it still relies on a shared Basic Auth credential. Keep it behind the documented HTTPS deployment boundary.
 
 See [`ROADMAP.md`](ROADMAP.md) for the ordered remediation plan, target structure, release gates, and later product improvements. The roadmap is an assessment and planning document; items described there are not implemented behavior unless this README and the code say otherwise.
 

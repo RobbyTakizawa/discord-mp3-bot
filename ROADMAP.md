@@ -23,11 +23,11 @@ Do not add a database, frontend framework, TypeScript migration, queue, cloud st
 
 ### Critical security boundaries
 
-1. **Upload destinations are not contained.** Category and custom filename fields currently influence Multer paths without server-side basename or containment validation. Traversal can create directories and write or overwrite `.mp3`-suffixed files outside `music/` wherever the process has permission.
-2. **The panel still needs remaining browser security hardening.** Filesystem-derived labels and upload result paths are now escaped and playback controls use data attributes rather than inline handlers, but CSP, CSRF protection, and rate limiting are not implemented.
-3. **Uploads are unbounded and unverified.** There are no file-size or field-count limits, actual MP3 validation, safe staging workflow, duplicate policy, or reliable failed-upload cleanup.
+1. **Upload storage is hardened.** Uploads accept only the root or an existing immediate category, apply a conservative normalized basename policy, reject symlinked categories and duplicate destinations, and publish validated files from an out-of-catalog staging directory without overwriting.
+2. **Browser defenses are in place.** Filesystem-derived output is escaped, scripts and styles use per-response CSP nonces, state changes require a CSRF token, and authentication failures plus state-changing requests have bounded in-memory rate limits.
+3. **Uploads are bounded and verified.** Multer limits multipart files, bytes, fields, field sizes, and parts. FFprobe must identify an MP3 audio stream and FFmpeg must decode a bounded sample within a shared ten-second timeout; rejected, oversized, invalid, or aborted staging files are removed.
 
-Until these issues are fixed, treat the panel as trusted-network administration only, keep it behind HTTPS, and do not expose it broadly to the internet.
+The panel still uses shared Basic Auth and should remain trusted-administrator tooling behind HTTPS. Discord authorization and stronger multi-user identity belong to later work.
 
 ### Voice lifecycle and correctness
 
@@ -42,11 +42,10 @@ For the current product, the recommended rule is one globally active voice sessi
 
 ### Structure and testability
 
-- `index.js` owns configuration, catalog scanning, Discord events, voice state, Express routes, upload storage, HTML rendering, login, and listening.
-- Importing the module has process side effects, which prevents isolated unit and HTTP tests.
-- The initial Node test suite covers bootstrap, catalog, authentication, rendering, and routing; upload, command, and voice-state behavior still need focused coverage.
-- Catalog and path behavior have no regression tests despite being security-sensitive.
-- There is not yet automated coverage for uploads, command parsing, or voice state transitions.
+- `index.js` composes configuration, catalog access, Discord events, voice behavior, login, and HTTP startup; web routes, rendering, and upload storage are independently importable boundaries.
+- Importing the application no longer logs in, listens, or creates runtime directories.
+- The Node test suite covers bootstrap, catalog, authentication, rendering, routing, upload policy, validation boundaries, rate limiting, CSRF, duplicate rejection, and cleanup.
+- Command parsing and voice-state behavior still need focused automated coverage.
 
 ### Dependencies and runtime
 
@@ -56,7 +55,7 @@ At the time of the assessment:
 - Node.js 24.16.0 satisfied the required runtime range.
 - FFmpeg was not found in the assessment environment, so live playback could not be verified there.
 - `npm audit --omit=dev` reported 15 production-tree advisories: 1 critical, 10 high, 3 moderate, and 1 low. Some are transitive or installation-time findings rather than directly reachable application vulnerabilities.
-- Available direct upgrades included `@discordjs/voice` 0.19.2, `discord.js` 14.27.0, and Multer 2.2.0.
+- Available direct upgrades included `@discordjs/voice` 0.19.2 and `discord.js` 14.27.0. Multer was upgraded separately to 2.2.0 during upload hardening.
 - The native `@discordjs/opus` installation chain had unresolved audit findings through `@discordjs/node-pre-gyp` and `tar`.
 - `prism-media` appeared redundant as a direct dependency because the application does not import it and `@discordjs/voice` already provides it.
 
@@ -67,10 +66,10 @@ Dependency versions and advisories are time-sensitive. Rerun `npm outdated` and 
 - `!list` can exceed Discord's message-size limit.
 - Filesystem names can affect Discord Markdown or unintended mentions.
 - Catalog ordering is not deterministic, and one unreadable category can abort the remainder of a scan.
-- Playback identifiers now follow the documented root/one-level catalog depth; upload write paths still lack equivalent validation.
+- Playback identifiers and upload destinations now follow the documented root/one-level catalog depth and containment rules.
 - Discord commands have no guild, role, or user authorization.
 - Browser actions now use relative URLs and are covered at the direct root and through a prefix-stripping application mount; live reverse-proxy verification remains a release gate.
-- Basic Auth depends on HTTPS at the deployment boundary and currently has no rate limiting or CSRF defense.
+- Basic Auth still depends on HTTPS at the deployment boundary. Authentication failure and state-changing request limits are process-local and reset on restart.
 - Startup does not coordinate Discord readiness with HTTP readiness.
 - There is no graceful shutdown, health/readiness reporting, or structured operational logging.
 - Package metadata lacks useful `start` and real `test` scripts and an `engines` declaration.
@@ -116,7 +115,7 @@ Completion record:
 - FFmpeg and FFprobe are installed, and the preserved Opus module loads successfully under the Discord service's pinned runtime.
 - Web credential rotation was considered and declined; the existing credential remains in use.
 
-Accepted design decision: the owner chose to keep `/discord/` internet-addressable through the HTTPS reverse proxy with Basic Auth instead of restricting it by client IP or trusted network. Phase 0 is considered complete with this explicit exception to the original network-restriction recommendation. This decision does not classify the uploader as hardened or remove the upload validation, output escaping, rate limiting, CSRF, or authentication work in later phases.
+Accepted design decision: the owner chose to keep `/discord/` internet-addressable through the HTTPS reverse proxy with Basic Auth instead of restricting it by client IP or trusted network. Phase 0 is considered complete with this explicit exception to the original network-restriction recommendation. At that point the decision did not classify the uploader as hardened; the upload validation, output escaping, rate limiting, and CSRF work was subsequently implemented in Phase 4.
 
 ### 1. Freeze the behavior decisions — Complete (2026-08-21)
 
@@ -186,9 +185,11 @@ Completion record:
 - Added HTTP tests for Basic Auth, direct-root relative browser actions, control routing, and escaped filesystem-derived labels.
 - Importing `index.js` no longer requires `DISCORD_TOKEN`, logs in to Discord, opens an HTTP listener, or creates the runtime music directory.
 
-Phase 4 is now the next implementation phase: harden upload storage and web output, including destination validation, limits, staged MP3 validation, duplicate rejection, CSRF/security headers, and rate limiting.
+Phase 4 completed the upload storage and browser hardening boundary. Phase 5 is now the next implementation phase: introduce the global voice-session controller and focused state-transition tests.
 
 ### 4. Harden upload storage and web output
+
+Status: Complete (2026-08-21)
 
 - Accept only `uncategorized` or an existing immediate category.
 - Define and test a conservative category and filename policy.
@@ -206,6 +207,16 @@ Phase 4 is now the next implementation phase: harden upload storage and web outp
 - Add consistent errors, security headers, CSRF defense, and appropriate rate limits.
 
 Completion condition: automated tests cover traversal, stored XSS, invalid and oversized uploads, duplicate handling, aborted-upload cleanup, and authentication on every state-changing route.
+
+Completion record:
+
+- Added normalized conservative category and filename validation, canonical containment checks, existing-category enforcement, and explicit rejection of category symlinks and Windows-reserved basenames.
+- Changed uploads to random files in a permission-restricted staging directory outside `music/`, validated them with bounded FFprobe identification and FFmpeg decoding, and published them with exclusive hard links so concurrent or existing destinations cannot be overwritten.
+- Added multipart limits (one file, 25 MB, bounded fields/parts), MIME and extension screening, consistent upload errors, and cleanup for validation failures, limit failures, CSRF failures, duplicates, and aborted requests.
+- Upgraded Multer from 2.0.2 to the patched 2.2.0 release.
+- Added per-response CSP nonces, restrictive security headers, CSRF protection for upload and control actions, removal of inline style attributes, and in-memory limits for failed authentication and state changes.
+- Added automated coverage for direct and prefix-mounted routing, authentication on state-changing routes, CSRF, traversal, Unicode normalization, reserved names, symlink policy, stored XSS escaping, invalid MIME/audio, oversized files, duplicates, rate limiting, and aborted-upload cleanup.
+- Re-ran the production-tree audit after the Multer upgrade: Multer advisories were cleared, while 14 unrelated/transitive findings remain for the later dependency phase (1 critical, 9 high, 3 moderate, and 1 low).
 
 ### 5. Introduce a voice-session controller
 

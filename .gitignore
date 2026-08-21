@@ -6,6 +6,7 @@ node_modules/
 
 # Downloaded/generated music
 music/
+.discord-mp3-upload-staging/
 .server-backups/
 
 # Editor temporary files
