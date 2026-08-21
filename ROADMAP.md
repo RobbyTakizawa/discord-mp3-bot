@@ -31,21 +31,21 @@ The panel still uses shared Basic Auth and should remain trusted-administrator t
 
 ### Voice lifecycle and correctness
 
-- One audio player is shared globally, while voice connections can remain active in multiple guilds. Subscribing the player to another connection can send the next resource to multiple servers.
-- An existing guild connection is reused without checking whether it is in the newly requested channel.
-- Discord `!stop` stops the global player but destroys only the requesting guild's connection, while web stop destroys all connections.
-- `NoSubscriberBehavior.Play` allows a resource to continue after its last subscription disappears.
-- Web and Discord control actions are not serialized and can race.
+- One global voice-session controller owns the shared player, at most one connection, the active guild/channel target, and the current resource.
+- A request for a different target destroys the old connection before joining and subscribing only the new connection.
+- Discord `!stop`, web stop, last-human departure, and graceful shutdown clear the same session through an idempotent operation.
+- The player uses `NoSubscriberBehavior.Stop`, and losing an unrecoverable connection stops the resource rather than leaving it running without a subscriber.
+- Web and Discord play/stop operations are serialized by the controller.
 - Web playback still chooses the first cached voice channel containing a human member, so target selection is implicit.
 
-For the current product, the recommended rule is one globally active voice session: one player, one active guild/channel connection, and one current resource. Starting playback moves that session to the new target. Stop and shutdown clear the complete session. True simultaneous multi-guild playback belongs in the later roadmap.
+The voice lifecycle is covered by fake-driven state-transition tests. Live Discord verification of play, replacement, movement, stop, departure, reconnection, and shutdown remains outstanding. True simultaneous multi-guild playback belongs in the later roadmap.
 
 ### Structure and testability
 
-- `index.js` composes configuration, catalog access, Discord events, voice behavior, login, and HTTP startup; web routes, rendering, and upload storage are independently importable boundaries.
+- `index.js` composes configuration, catalog access, Discord events, login, HTTP startup, and shutdown; voice lifecycle, web routes, rendering, and upload storage are independently importable boundaries.
 - Importing the application no longer logs in, listens, or creates runtime directories.
-- The Node test suite covers bootstrap, catalog, authentication, rendering, routing, upload policy, validation boundaries, rate limiting, CSRF, duplicate rejection, and cleanup.
-- Command parsing and voice-state behavior still need focused automated coverage.
+- The Node test suite covers bootstrap, catalog, voice-session transitions, authentication, rendering, routing, upload policy, validation boundaries, rate limiting, CSRF, duplicate rejection, and cleanup.
+- Command parsing still needs focused automated coverage; voice-session state transitions now have isolated fake-driven tests.
 
 ### Dependencies and runtime
 
@@ -71,7 +71,7 @@ Dependency versions and advisories are time-sensitive. Rerun `npm outdated` and 
 - Browser actions now use relative URLs and are covered at the direct root and through a prefix-stripping application mount; live reverse-proxy verification remains a release gate.
 - Basic Auth still depends on HTTPS at the deployment boundary. Authentication failure and state-changing request limits are process-local and reset on restart.
 - Startup does not coordinate Discord readiness with HTTP readiness.
-- There is no graceful shutdown, health/readiness reporting, or structured operational logging.
+- There is no health/readiness reporting or structured operational logging.
 - Package metadata lacks useful `start` and real `test` scripts and an `engines` declaration.
 - Music backup and restore remain deployment responsibilities without a verified procedure.
 
@@ -185,7 +185,7 @@ Completion record:
 - Added HTTP tests for Basic Auth, direct-root relative browser actions, control routing, and escaped filesystem-derived labels.
 - Importing `index.js` no longer requires `DISCORD_TOKEN`, logs in to Discord, opens an HTTP listener, or creates the runtime music directory.
 
-Phase 4 completed the upload storage and browser hardening boundary. Phase 5 is now the next implementation phase: introduce the global voice-session controller and focused state-transition tests.
+Phase 4 completed the upload storage and browser hardening boundary. Phase 5 implementation and automated coverage are complete; its non-production live Discord checklist remains the next release gate.
 
 ### 4. Harden upload storage and web output
 
@@ -220,6 +220,8 @@ Completion record:
 
 ### 5. Introduce a voice-session controller
 
+Status: Implementation and automated tests complete (2026-08-21); live Discord verification pending
+
 Create one owner for:
 
 - The audio player and resource.
@@ -233,6 +235,15 @@ Create one owner for:
 Ensure that only the intended connection is subscribed. A request for another target must deliberately move the session. Destroying the last subscription must not leave an unwanted resource running.
 
 Completion condition: state transitions have automated tests with fakes and pass the focused non-production Discord voice checklist.
+
+Implementation record:
+
+- Added `voice-session.js` as the single owner of the player, active connection, guild/channel target, and current resource.
+- Serialized Discord and web play/stop operations, made target changes destroy the old connection before joining the new target, and unified Discord stop, web stop, last-human departure, and shutdown.
+- Changed the player to stop when it has no subscriber, clear completed resources, attempt bounded recovery for disconnected connections, and clear the session after an unrecoverable disconnect or player error.
+- Added idempotent SIGINT/SIGTERM runtime cleanup that closes the web listener, clears voice state, and destroys the Discord client while attempting every cleanup step even if one fails.
+- Added fake-driven tests for initial play, same-target replacement, cross-target movement, resource failure preservation, serialization, idempotent stop, last-human departure, completion, disconnect failure, and shutdown.
+- Local syntax checks and all 27 automated tests pass. The non-production live Discord checklist has not been run in this workspace, so Phase 5 is not marked fully complete.
 
 ### 6. Complete modularization and command robustness
 
@@ -269,7 +280,6 @@ Completion condition: supported versions are explicit, startup failures are acti
 - Use relative or consistently configurable browser URLs.
 - Handle Discord login rejection explicitly.
 - Define whether HTTP can serve before Discord is ready and expose readiness accurately.
-- Add graceful SIGINT and SIGTERM handling.
 - Add minimal health and readiness endpoints.
 - Disable unnecessary server-identification headers.
 - Add request IDs and concise structured logs without secrets.

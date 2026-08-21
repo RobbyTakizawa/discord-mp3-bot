@@ -19,6 +19,7 @@ One Node.js process owns all runtime behavior:
 
 - A `discord.js` client listens for `!` prefix commands and voice-state changes.
 - A single `@discordjs/voice` audio player is shared globally.
+- `voice-session.js` owns that player, at most one connection, the active target and resource, and serialized lifecycle operations.
 - Express serves a server-rendered control panel and JSON control endpoint.
 - Multer stages bounded uploads in `.discord-mp3-upload-staging/`; `upload-storage.js` validates and exclusively publishes them into the local `music/` tree.
 - Catalog functions in `catalog.js` rescan the filesystem synchronously when requested.
@@ -31,6 +32,7 @@ Runtime data is filesystem-only. `music/` is created at startup and ignored by G
 - `!help`, `!list`, `!play`, and `!stop` are the supported Discord commands.
 - A Discord `!play` caller must already be in a voice channel.
 - Starting a track immediately replaces the current track.
+- A different Discord or web target moves the single global session after destroying its previous connection.
 - Root MP3s appear under the logical `uncategorized` label but physically live directly in `music/`.
 - Categories are immediate subdirectories of `music/`; discovery does not recurse into deeper levels.
 - Only filenames ending in lowercase `.mp3` are cataloged.
@@ -40,13 +42,13 @@ Runtime data is filesystem-only. `music/` is created at startup and ignored by G
 - Upload requests accept one file up to 25 MB, stage outside the catalog, require FFprobe identification plus a bounded FFmpeg decode sample within a shared ten-second timeout, and clean up rejected or aborted staging files.
 - The bot destroys its connection when no human members remain in its voice channel.
 - Web playback chooses the first cached voice channel with a human member across all guilds.
-- Web stop is global and destroys all voice connections.
+- Discord stop, web stop, last-human departure, and graceful shutdown all clear the same global session; stop is idempotent.
 
 Changing any of these semantics requires corresponding README updates and focused manual verification.
 
 ## Frozen stabilization acceptance contract
 
-Phase 1 behavior decisions are complete. Later implementation and tests must converge on these results without treating them as already implemented:
+Phase 1 behavior decisions are complete. The Phase 5 voice-session implementation and automated tests now converge on these results; live non-production Discord verification remains required:
 
 - Exactly one global voice session owns the player, at most one connection, one target guild/channel, and one current resource.
 - Successful Discord or web play replaces the current resource. A different selected target destroys the old connection and moves the session so only the new connection is subscribed.
@@ -59,7 +61,7 @@ Phase 1 behavior decisions are complete. Later implementation and tests must con
 - Generated form actions, control requests, and back links use relative URLs and work from both the direct Express root and a prefix-stripping `/discord/` reverse proxy.
 - Supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; no queue, simultaneous multi-guild playback, nested catalog, database, cloud storage, or remote URL ingestion is introduced during stabilization.
 
-Known current mismatches include per-guild Discord stop versus global web stop, stale connections when targets change, and no graceful shutdown. Upload hardening and duplicate rejection are implemented. Keep remaining mismatches visible until the corresponding implementation and verification are complete.
+The global session, unified stop paths, target movement, serialized operations, disconnect handling, and graceful shutdown wiring are implemented. Keep the outstanding live Discord verification visible until it is performed.
 
 ## Web routing contract
 

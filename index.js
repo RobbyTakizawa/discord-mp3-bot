@@ -6,14 +6,13 @@ const {
   createAudioPlayer,
   createAudioResource,
   NoSubscriberBehavior,
-  getVoiceConnection,
   entersState,
-  VoiceConnectionStatus,
 } = require("@discordjs/voice");
 
 const { loadConfig, validateConfig } = require("./config");
 const { createCatalog } = require("./catalog");
 const { createWebApp } = require("./web-app");
+const { createVoiceSession } = require("./voice-session");
 
 function createDiscordClient() {
   return new Client({
@@ -32,43 +31,16 @@ function createRuntime(config, dependencies = {}) {
   const catalog = dependencies.catalog || createCatalog({ musicDir: config.musicDir });
   const client = dependencies.client || createDiscordClient();
   const player = dependencies.player || createAudioPlayer({
-    behaviors: { noSubscriber: NoSubscriberBehavior.Play },
+    behaviors: { noSubscriber: NoSubscriberBehavior.Stop },
   });
-  const voice = {
+  const logger = dependencies.logger || console;
+  const voiceSession = dependencies.voiceSession || createVoiceSession({
+    player,
     createAudioResource: dependencies.createAudioResource || createAudioResource,
     entersState: dependencies.entersState || entersState,
-    getVoiceConnection: dependencies.getVoiceConnection || getVoiceConnection,
     joinVoiceChannel: dependencies.joinVoiceChannel || joinVoiceChannel,
-  };
-  const logger = dependencies.logger || console;
-
-  player.on("error", (err) => logger.error("Audio player error:", err));
-  player.on("stateChange", (oldState, newState) => {
-    logger.log(`Audio player state: ${oldState.status} -> ${newState.status}`);
+    logger,
   });
-
-  async function ensureConnectionReady(guild, voiceChannel) {
-    let connection = voice.getVoiceConnection(guild.id);
-
-    if (!connection) {
-      logger.log(`Joining voice channel ${voiceChannel.id}`);
-      connection = voice.joinVoiceChannel({
-        channelId: voiceChannel.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator,
-        selfDeaf: true,
-      });
-    }
-
-    try {
-      await voice.entersState(connection, VoiceConnectionStatus.Ready, 20000);
-    } catch (err) {
-      logger.error("entersState READY failed:", err);
-      throw err;
-    }
-
-    return connection;
-  }
 
   async function playDiscord(msg, name) {
     const voiceChannel = msg.member?.voice?.channel;
@@ -78,20 +50,12 @@ function createRuntime(config, dependencies = {}) {
     if (!filePath) return msg.reply("File not found.");
 
     try {
-      const connection = await ensureConnectionReady(msg.guild, voiceChannel);
-      connection.subscribe(player);
-      player.play(voice.createAudioResource(filePath));
+      await voiceSession.play({ guild: msg.guild, channel: voiceChannel, filePath });
       return msg.reply(`Playing ${name}`);
     } catch (err) {
       logger.error(err);
       return msg.reply("Failed to play track.");
     }
-  }
-
-  function stopDiscord(guildId) {
-    player.stop(true);
-    const connection = voice.getVoiceConnection(guildId);
-    if (connection) connection.destroy();
   }
 
   function findWebTarget() {
@@ -113,25 +77,15 @@ function createRuntime(config, dependencies = {}) {
     }
 
     logger.log(`Web Control: Playing "${song}" in channel ${target.channel.name}`);
-    const connection = await ensureConnectionReady(target.guild, target.channel);
-    connection.subscribe(player);
-    player.play(voice.createAudioResource(filePath));
+    await voiceSession.play({ guild: target.guild, channel: target.channel, filePath });
     return `Playing ${song}`;
-  }
-
-  function stopWeb() {
-    player.stop(true);
-    client.guilds.cache.forEach((guild) => {
-      const connection = voice.getVoiceConnection(guild.id);
-      if (connection) connection.destroy();
-    });
   }
 
   const app = createWebApp({
     config,
     catalog,
     logger,
-    controlHandlers: { play: playWeb, stop: stopWeb },
+    controlHandlers: { play: playWeb, stop: () => voiceSession.stop() },
   });
 
   client.on("messageCreate", async (msg) => {
@@ -168,23 +122,52 @@ function createRuntime(config, dependencies = {}) {
     }
 
     if (cmd === "stop") {
-      stopDiscord(msg.guild.id);
-      return msg.reply("Stopped.");
+      try {
+        await voiceSession.stop();
+        return msg.reply("Stopped.");
+      } catch (err) {
+        logger.error("Discord stop failed:", err);
+        return msg.reply("Failed to stop playback.");
+      }
     }
   });
 
   client.on("voiceStateUpdate", (oldState) => {
-    const connection = voice.getVoiceConnection(oldState.guild.id);
-    if (!connection) return;
-
-    const channel = oldState.guild.channels.cache.get(connection.joinConfig.channelId);
-    if (!channel) return;
-
-    const humans = channel.members.filter((member) => !member.user.bot);
-    if (humans.size === 0) connection.destroy();
+    voiceSession.handleVoiceStateUpdate(oldState).catch((err) => {
+      logger.error("Voice-state handling failed:", err);
+    });
   });
 
-  return { app, catalog, client, config, player };
+  const runtime = { app, catalog, client, config, player, voiceSession };
+  let shutdownPromise = null;
+  runtime.shutdown = () => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
+      const failures = [];
+      if (runtime.server?.listening) {
+        try {
+          await new Promise((resolve, reject) => {
+            runtime.server.close((err) => err ? reject(err) : resolve());
+          });
+        } catch (err) {
+          failures.push(err);
+        }
+      }
+      try {
+        await voiceSession.shutdown();
+      } catch (err) {
+        failures.push(err);
+      }
+      try {
+        await client.destroy();
+      } catch (err) {
+        failures.push(err);
+      }
+      if (failures.length > 0) throw new AggregateError(failures, "Runtime shutdown failed.");
+    })();
+    return shutdownPromise;
+  };
+  return runtime;
 }
 
 function main() {
@@ -205,6 +188,20 @@ function main() {
   runtime.server = runtime.app.listen(config.webPort, config.webHost, () => {
     console.log(`Uploader and remote controller running at http://${config.webHost}:${config.webPort}`);
   });
+  let shuttingDown = false;
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Received ${signal}; shutting down.`);
+    try {
+      await runtime.shutdown();
+    } catch (err) {
+      console.error("Graceful shutdown failed:", err);
+      process.exitCode = 1;
+    }
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
   return runtime;
 }
 

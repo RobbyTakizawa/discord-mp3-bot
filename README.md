@@ -14,35 +14,36 @@ A small Discord soundboard bot that plays MP3 files from a local `music/` direct
 - Disconnect automatically when the bot is alone in its voice channel.
 - Run a real local regression suite with `npm test`.
 
-Playback is intentionally simple: there is one shared audio player, no queue, and starting a track replaces the current track. This also means playback is global rather than independent per Discord server.
+Playback is intentionally simple: one global voice session owns one audio player and at most one Discord voice connection. Starting a track replaces the current track and moves that session when a different guild or channel is selected. There is no queue or simultaneous per-server playback.
 
 ## Accepted stabilization contract
 
-The behavior decisions for the stabilization work are frozen. This is the acceptance target for later code and tests, not a claim that every item is implemented yet:
+The behavior decisions for the stabilization work are frozen. The voice lifecycle items below are implemented and covered by local state-transition tests; later stabilization work remains tracked in the roadmap:
 
 - One global voice session owns one player, at most one voice connection, one target channel, and one current track.
 - A successful Discord or web play request replaces the current track and moves that session when the selected target changes.
 - Discord play targets the caller's current voice channel. Web play temporarily keeps its existing first-cached-channel-with-a-human selection rule.
-- Discord stop, web stop, last-human departure, and graceful shutdown will all clear the same global session. Stopping an already stopped session will succeed harmlessly.
+- Discord stop, web stop, last-human departure, and graceful shutdown all clear the same global session. Stopping an already stopped session succeeds harmlessly.
 - The catalog remains filesystem-only: root tracks are labeled `uncategorized`, categories are one directory deep, and only lowercase `.mp3` filenames at those depths are discoverable and playable.
 - Uploads reject an existing destination instead of overwriting it implicitly.
 - Every web route remains protected by Basic Auth behind HTTPS.
-- Browser actions will use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
+- Browser actions use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
 - The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
-Current mismatches are still documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). In particular, session movement, unified stop behavior, and graceful shutdown are not implemented yet. Upload hardening and duplicate rejection are implemented.
+The remaining work and live verification gates are documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). Live Discord play, movement, stop, departure, reconnection, and shutdown still require non-production verification.
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `index.js` | Discord client, command handling, voice playback, and process composition. |
+| `index.js` | Discord client, command handling, process composition, and graceful shutdown wiring. |
+| `voice-session.js` | Serialized global ownership of the audio player, voice connection, target, resource, and lifecycle. |
 | `config.js` | Environment configuration parsing and startup validation. |
 | `catalog.js` | Music discovery and containment-checked playback identifiers. |
 | `render.js` | Escaped server-rendered control-panel HTML. |
 | `web-app.js` | Testable Express application, authentication, upload, and control routes. |
 | `upload-storage.js` | Upload naming policy, path containment, staging, FFprobe validation, and exclusive publication. |
-| `test/` | Node built-in test-runner coverage for bootstrap, catalog, authentication, rendering, routing, and hardened uploads. |
+| `test/` | Node built-in test-runner coverage for bootstrap, catalog, voice transitions, authentication, rendering, routing, and hardened uploads. |
 | `music/` | Runtime MP3 library. It is created automatically and ignored by Git. |
 | `package.json` | Node.js dependencies and package metadata. |
 | `.gitignore` | Excludes dependencies, local environment configuration, and runtime music. |
@@ -131,7 +132,7 @@ Catalog discovery only includes lowercase `.mp3` files at the root or directly i
 | `!list` | Lists root tracks and tracks in first-level category folders. |
 | `!play <name>` | Plays a root track in the caller's current voice channel. |
 | `!play <category/name>` | Plays a categorized track in the caller's current voice channel. |
-| `!stop` | Stops the shared player and destroys the connection for that Discord server. |
+| `!stop` | Stops playback and destroys the single global voice connection, regardless of which Discord server started it. |
 
 There are currently no role or user restrictions on Discord commands.
 
@@ -155,7 +156,7 @@ The application listens on loopback by default, which fits a reverse proxy runni
 
 Opening `http://localhost:3000/` directly now keeps upload, control, and back-link actions at the direct Express root. The same HTML also works beneath the documented `/discord/` proxy prefix.
 
-Web playback searches all connected Discord servers and selects the first voice channel containing at least one non-bot member. A user must therefore join a voice channel before pressing **Play**. The web **Stop** action stops playback and destroys all of the bot's voice connections.
+Web playback searches all connected Discord servers and selects the first voice channel containing at least one non-bot member. A user must therefore join a voice channel before pressing **Play**. The web **Stop** action clears the same global session as Discord `!stop`.
 
 ## Runtime workflows
 
@@ -163,8 +164,8 @@ Web playback searches all connected Discord servers and selects the first voice 
 
 1. A user sends `!play <track>` while in a voice channel.
 2. The bot resolves the identifier under `music/` and rejects paths outside that directory.
-3. It creates or reuses the server's voice connection.
-4. The shared audio player starts the MP3 and replaces any current resource.
+3. The global session reuses its connection only when the target guild and channel are unchanged; otherwise it destroys the old connection and joins the selected channel.
+4. The audio player starts the MP3 and replaces any current resource. Play and stop operations are serialized to prevent web and Discord control races.
 
 ### Browser upload
 
@@ -186,10 +187,9 @@ This repository is an early, single-process implementation. Keep these constrain
 - Upload validation requires the system `ffprobe` and `ffmpeg` executables. If either is unavailable, uploads fail closed.
 - Uploads can target only the root or an existing immediate category; the panel does not create categories.
 - Discord commands have no authorization checks or rate limits.
-- One singleton audio player is shared across every Discord server.
-- Discord stop currently destroys only the requesting guild's connection, while web stop destroys every connection; the accepted target is one unified global stop operation.
-- Existing guild connections are currently reused without moving to a newly requested voice channel.
+- Playback is intentionally global: a play request from another guild or channel moves and replaces the current session rather than creating simultaneous playback.
 - The web player's target-channel choice depends on cache iteration order and is not user-selectable.
+- Voice lifecycle transitions are covered with fakes, but live Discord play, channel movement, reconnect behavior, last-human departure, and signal-driven shutdown have not been verified in this workspace.
 
 Treat the web panel as trusted-administrator tooling because it still relies on a shared Basic Auth credential. Keep it behind the documented HTTPS deployment boundary.
 
