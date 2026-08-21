@@ -27,6 +27,7 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = "!";
 const MUSIC_DIR = path.resolve(__dirname, "music");
 
+const WEB_HOST = process.env.WEB_HOST || "127.0.0.1";
 const WEB_PORT = process.env.WEB_PORT || 3000;
 const WEB_USER = process.env.WEB_USER || "uploader";
 const WEB_PASS = process.env.WEB_PASS;
@@ -501,6 +502,6 @@ app.post("/api/control", basicAuth, async (req, res) => {
 
 client.login(TOKEN);
 
-app.listen(WEB_PORT, () => {
-  console.log(`Uploader and remote controller running on port ${WEB_PORT}`);
+app.listen(WEB_PORT, WEB_HOST, () => {
+  console.log(`Uploader and remote controller running at http://${WEB_HOST}:${WEB_PORT}`);
 });

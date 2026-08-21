@@ -97,7 +97,7 @@ Configuration and core modules should be importable without a Discord token, log
 
 The order below is intentional. Each numbered phase should remain a focused, reviewable change set where practical.
 
-### 0. Contain the current deployment
+### 0. Contain the current deployment — Complete (2026-08-21)
 
 Before implementation:
 
@@ -108,7 +108,15 @@ Before implementation:
 - Consider rotating web credentials if the panel has been broadly reachable.
 - Install FFmpeg and FFprobe in the verification environment.
 
-Completion condition: the unsafe uploader is not broadly exposed, runtime music is recoverable, and playback prerequisites are available for testing.
+Completion record:
+
+- Express now binds to `127.0.0.1`, so port 3000 is not directly reachable from the internet.
+- Nginx continues to publish `/discord/` over HTTPS, and the application retains Basic Auth on every web route.
+- The runtime `music/` library was archived, fully restore-tested, copied off-server, and verified by SHA-256. The colocated book tracker's SQLite database also received an application-consistent, integrity-checked off-server backup before further service work.
+- FFmpeg and FFprobe are installed, and the preserved Opus module loads successfully under the Discord service's pinned runtime.
+- Web credential rotation was considered and declined; the existing credential remains in use.
+
+Accepted design decision: the owner chose to keep `/discord/` internet-addressable through the HTTPS reverse proxy with Basic Auth instead of restricting it by client IP or trusted network. Phase 0 is considered complete with this explicit exception to the original network-restriction recommendation. This decision does not classify the uploader as hardened or remove the upload validation, output escaping, rate limiting, CSRF, or authentication work in later phases.
 
 ### 1. Freeze the behavior decisions
 

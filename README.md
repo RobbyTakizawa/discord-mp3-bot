@@ -58,6 +58,7 @@ The Python packages and `cookies.txt` referenced by `bb.py` are intentionally om
    $env:DISCORD_TOKEN = "your-bot-token"
    $env:WEB_PASS = "a-long-random-password"
    $env:WEB_USER = "uploader" # optional
+   $env:WEB_HOST = "127.0.0.1" # optional
    $env:WEB_PORT = "3000"     # optional
    node index.js
    ```
@@ -68,6 +69,7 @@ The Python packages and `cookies.txt` referenced by `bb.py` are intentionally om
    export DISCORD_TOKEN='your-bot-token'
    export WEB_PASS='a-long-random-password'
    export WEB_USER='uploader' # optional
+   export WEB_HOST='127.0.0.1' # optional
    export WEB_PORT='3000'     # optional
    node index.js
    ```
@@ -81,6 +83,7 @@ Never commit bot tokens, passwords, or cookies. `DISCORD_TOKEN` is required at s
 | `DISCORD_TOKEN` | Yes | None | Discord bot token used by `client.login`. |
 | `WEB_PASS` | For web use | None | Password checked by HTTP Basic Auth. |
 | `WEB_USER` | No | `uploader` | HTTP Basic Auth username. |
+| `WEB_HOST` | No | `127.0.0.1` | Address on which Express listens. Use `0.0.0.0` only when container or network topology requires it, and restrict access at the deployment boundary. |
 | `WEB_PORT` | No | `3000` | Port on which Express listens. |
 
 The Discord command prefix is currently hard-coded as `!`, and the music directory is hard-coded as `<repository>/music`.
@@ -130,6 +133,8 @@ location /discord/ {
     proxy_pass http://127.0.0.1:3000/;
 }
 ```
+
+The application listens on loopback by default, which fits a reverse proxy running on the same host. Container deployments that need to publish the listener outside the container must set `WEB_HOST=0.0.0.0` and keep the published port private to the proxy or trusted network.
 
 With the current code, opening `http://localhost:3000/` directly renders the page, but its upload and control requests target `/discord/...` and will not match the Express routes unless equivalent rewriting is present.
 

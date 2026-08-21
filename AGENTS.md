@@ -57,7 +57,7 @@ Every existing web route is protected by the local `basicAuth` middleware. Prese
 - Install exact Node dependencies with `npm ci`.
 - MP3 playback expects a system `ffmpeg` executable on `PATH`.
 - Required environment variable: `DISCORD_TOKEN`.
-- Web variables: `WEB_PASS` is required for usable web routes; `WEB_USER` defaults to `uploader`; `WEB_PORT` defaults to `3000`.
+- Web variables: `WEB_PASS` is required for usable web routes; `WEB_USER` defaults to `uploader`; `WEB_HOST` defaults to `127.0.0.1`; `WEB_PORT` defaults to `3000`.
 - The app does not import `dotenv`; a `.env` file is ignored by Git but is not loaded unless the process manager loads it.
 - Discord's privileged Message Content Intent must be enabled in the Developer Portal.
 
@@ -99,14 +99,48 @@ Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while ma
 
 Keep known limitations visible. Do not silently describe intended behavior as if it were already implemented.
 
+## Server-operation guidance
+
+Assume the repository owner is not familiar with server administration. When work must be performed on the deployed server, do not hand off a high-level checklist by itself. Provide explicit, ordered, copy-pasteable commands whenever safely possible.
+
+The current deployment is accessed as `ec2-user@18.216.161.208` with the identity file at `C:\Users\Robby\newkey.pem`. The identity file is outside the repository; never copy it into the repository, print its contents, or commit it.
+
+- SSH access is for deployment, operations, inspection, and verification—not code authoring. Make every code change in the local repository at `C:\Users\Robby\discord-mp3-bot`, review and validate it locally, and then deploy the exact validated artifact to production. Never create or edit application source code directly on the server, including with interactive editors, shell substitutions, inline scripts, or emergency hotfixes. If production differs from the local source, inspect and copy the relevant production state back to a safe local comparison file before deciding what to change; do not reconcile it by editing production in place.
+- Obtain the owner's permission before beginning a new category of server work. Once the owner authorizes the task, proceed independently with all low-risk, bounded operations needed to complete it; do not repeatedly ask permission for routine SSH calls or safe checkpoints. Permission is not blanket authorization for newly discovered high-risk, destructive, host-wide, or materially broader actions.
+- Low-risk standing authorization includes read-only discovery and health checks; bounded log inspection; syntax and dependency-load checks that do not build or install; staging files outside live paths; creating new timestamped, permission-restricted backups with application-consistent tools; checksums and restore verification; copying verified backups off-server; atomic deployment of already-validated files; and controlled restart of only the in-scope Discord service when a verified rollback is ready and colocated services are checked before and after.
+- Low-risk actions should be performed directly through SSH. Give concise progress and results instead of instructions for the owner to execute. Ask the owner to run commands only when direct access is unavailable or an interactive step genuinely requires them.
+- Begin with read-only discovery commands to identify the operating system, application path, process manager, reverse proxy, container setup, service name, and music-directory location instead of expecting the owner to know them.
+- Separate commands that are safe to run verbatim from commands containing placeholders. Define every placeholder and show a concrete example.
+- State where each command must be run, whether it needs elevated privileges, and what successful output or state should look like.
+- For configuration changes, provide the exact file to edit and the complete relevant configuration block. Include syntax checks, reload or restart commands, and post-change verification.
+- For backups or other data-sensitive operations, verify source and destination paths first, avoid overwriting live data during restore tests, and include a rollback or recovery procedure.
+- Break instructions into small checkpoints and ask the owner to paste command output when the next command depends on details of their environment.
+- Never claim an operational roadmap phase is complete until its server-side completion conditions have been verified.
+
+## Production server safety
+
+The EC2 host is a shared production server. In addition to this Discord bot, it runs a book-tracker website backed by SQLite. Protecting the unrelated website and its data takes priority over completing Discord work quickly.
+
+- Before every production mutation, identify the command's complete blast radius, affected processes, expected CPU, memory, disk, and network load, downtime, failure modes, and rollback path. If any of these are unknown, stop and investigate read-only first.
+- Inventory colocated services, active users, listening ports, current load, available RAM, configured swap, free disk space, and service restart policies before installing packages, rebuilding native modules, changing runtimes, or restarting anything.
+- Do not compile native dependencies or run other resource-intensive work on the production host until capacity has been measured and shown sufficient. Prefer building and testing elsewhere, then deploying the verified artifact. Adding swap, resizing the instance, or changing build concurrency requires its own risk review and permission.
+- Treat package installation, global runtime selection, `npm ci`, native builds, unbounded or resource-intensive commands, termination of processes not created by the current low-risk step, firewall or security-group changes, credential rotation, database writes or migrations, proxy changes, changes to unrelated services, and host lifecycle operations as high-risk material steps. Explain the exact impact and obtain explicit permission immediately before each step.
+- A controlled restart of only `discord-mp3-bot.service` is pre-authorized when it is required to activate an already-validated Discord-only change, expected downtime is a few minutes or less, rollback is verified, and the book tracker plus Nginx are checked immediately before and after. Restarting the book tracker, Nginx, SSH, or any host-wide target is not covered by this standing authorization.
+- Never reboot, stop, resize, or terminate the EC2 instance without separate, immediate owner approval after explaining that every colocated service will be interrupted. A prior request to maintain the Discord bot is not permission to affect the whole host.
+- Before any action that might interrupt the book tracker or host, locate its SQLite database and journal/WAL files, identify its service, create an application-consistent backup using a SQLite-aware method, verify that backup, and document the restore procedure. Never copy only the main database file while writes may be active.
+- Create and verify rollback artifacts before a mutation, but do not assume that having a rollback makes a risky action acceptable. Confirm that rollback can be executed under the same failure conditions the change might create.
+- Use small checkpoints. After each mutation, verify host responsiveness and every affected and colocated service before continuing. If resource pressure, loss of access, or an unexpected effect appears, stop the current work; do not proceed to the next mutation or broaden recovery without permission.
+- Never experiment on production. If a command has not been validated in a comparable non-production environment and could affect availability or persistent data, present the risk and wait for direction.
+
 ## Change workflow
 
 1. Inspect `git status` before editing and preserve unrelated user changes.
 2. Read the complete affected path in `index.js`; related UI, route, player, and catalog logic all live in the same file.
 3. Make the smallest coherent change and update documentation in the same patch.
-4. Run syntax and relevant available checks.
-5. Manually exercise affected Discord behavior in a non-production server when credentials and voice access are available.
-6. Report unverified runtime behavior explicitly; never imply a live Discord or upload test ran when it did not.
+4. After every code change, review this `AGENTS.md` context and update it in the same patch whenever the change affects supported behavior, architecture, configuration, environment or deployment requirements, routes, dependencies, security boundaries, known limitations, or verification expectations. If none of that context changed, no `AGENTS.md` edit is required.
+5. Run syntax and relevant available checks.
+6. Manually exercise affected Discord behavior in a non-production server when credentials and voice access are available.
+7. Report unverified runtime behavior explicitly; never imply a live Discord or upload test ran when it did not.
 
 ## Verification baseline
 
