@@ -31,14 +31,16 @@ The panel still uses shared Basic Auth and should remain trusted-administrator t
 
 ### Voice lifecycle and correctness
 
-- One global voice-session controller owns the shared player, at most one connection, the active guild/channel target, and the current resource.
+- One global voice-session controller owns the shared player, at most one connection, the active guild/channel target, the current track/resource, a pending queue (max 100), a loop-current flag, volume (0–100), and a monotonic revision snapshot.
 - A request for a different target destroys the old connection before joining and subscribing only the new connection.
-- Discord `!stop`, web stop, last-human departure, and graceful shutdown clear the same session through an idempotent operation.
+- Discord `!play` and web **Play Now** replace the current track and clear the pending queue. Web **Add to Queue** appends (duplicates allowed) and starts immediately when idle; queued playback stays in the current channel.
+- Natural completion advances to the next queued entry, recreates the current resource when looping (queue waits), or goes idle while keeping the connection. **Skip** advances even while looping. Queued files are revalidated for containment/existence at start; missing files are skipped. Stale completion/error events from prior resources are ignored via generation IDs.
+- Discord `!stop`, web stop, last-human departure, unrecoverable disconnect, and graceful shutdown clear playback, queue, and loop state through an idempotent operation.
 - The player uses `NoSubscriberBehavior.Stop`, and losing an unrecoverable connection stops the resource rather than leaving it running without a subscriber.
-- Web and Discord play/stop operations are serialized by the controller.
-- Web playback still chooses the first cached voice channel containing a human member, so target selection is implicit.
+- Web and Discord play/queue/skip/loop/volume/stop operations are serialized by the controller. Volume uses `inlineVolume` and applies immediately plus to future tracks.
+- Web playback still chooses the first cached voice channel containing a human member when idle, so target selection is implicit but now displayed in the panel.
 
-The voice lifecycle is covered by fake-driven state-transition tests. Live Discord verification of play, replacement, movement, stop, departure, reconnection, and shutdown remains outstanding. True simultaneous multi-guild playback belongs in the later roadmap.
+The voice lifecycle is covered by fake-driven state-transition tests, including queue advancement, loop recreation, skip-while-looping, Play Now clearing, stop/departure/disconnect/shutdown clearing, volume, deleted-file skipping, stale events, and concurrent controls. Live Discord verification of play, queue, loop, skip, volume, replacement, movement, stop, departure, reconnection, and shutdown remains outstanding. True simultaneous multi-guild playback belongs in the later roadmap.
 
 ### Structure and testability
 
@@ -50,7 +52,7 @@ The voice lifecycle is covered by fake-driven state-transition tests. Live Disco
 ### Dependencies and runtime
 
 - The supported runtime is explicit at Node.js `>=22.12.0`, with `start` and real `test` package scripts.
-- Direct Discord dependencies are refreshed to `@discordjs/voice` 0.19.2 and `discord.js` 14.27.0; Multer remains at 2.2.0.
+- Direct Discord dependencies are refreshed to `@discordjs/voice` 0.19.2 and `discord.js` 14.27.0; Multer was at 2.2.0 and is now resolved to 2.4.0 with transitive `qs` 6.16.0 via a non-force `npm audit fix` (`npm audit --omit=dev` clean).
 - Redundant direct `prism-media` and native `@discordjs/opus` declarations were removed. The supported pure-JavaScript `opusscript` 0.0.x fallback was selected for this single-stream bot, avoiding the native downloader/build chain at the accepted cost of lower encoding performance.
 - Safe transitive updates cleared the production-tree audit on 2026-08-21. Advisory results are time-sensitive and must still be rerun for release and future dependency work.
 - Startup validates the token, web credentials, listener host/port, Discord authorization configuration, FFmpeg, FFprobe, and Opus encoder before login or listening.
@@ -77,9 +79,10 @@ The exact filenames may evolve, but responsibilities should converge on these bo
 | Process bootstrap | Validate startup, construct components, log in, listen, and shut down |
 | Configuration | Parse and validate environment values without process side effects |
 | Catalog and storage | Track discovery, identifier rules, and safe read/write resolution |
-| Voice session | Own the player, active connection, current target, and serialized operations |
+| Media metadata | Cached FFprobe durations keyed by path, size, and mtime |
+| Voice session | Own the player, active connection, current target/track, queue, loop, volume, and serialized operations |
 | Discord adapter | Command parsing, authorization, replies, and Discord event translation |
-| Web application | Express middleware, authentication, upload/control routes, and errors |
+| Web application | Express middleware, authentication, upload/library/playback/control routes, and errors |
 | Web rendering | Escaped HTML plus static browser CSS and JavaScript |
 | Tests | Temporary-filesystem, HTTP, command, and mocked-voice coverage |
 
@@ -324,7 +327,7 @@ Automated gates:
 - `node --check index.js`
 - A real `npm test`
 - `npm audit --omit=dev`, with remaining findings reviewed rather than counted blindly
-- Tests for traversal, XSS, authentication, upload limits, base paths, catalog rules, and voice transitions
+- Tests for traversal, XSS, authentication, upload limits, base paths, catalog rules, voice transitions, queue/loop/volume, durations, and control/library/playback routing
 
 Manual gates:
 
@@ -332,12 +335,25 @@ Manual gates:
 - Root and categorized catalog listing
 - Missing-file and outside-voice rejection
 - Play, replacement play, channel move, stop, and last-human disconnect
-- Web authentication, upload, playback, and global stop
-- Direct-port and `/discord/` reverse-proxy behavior
+- Web authentication, upload, Play Now, queue advance, loop, skip, volume, and global stop clearing queue/loop
+- Direct-port and `/discord/` reverse-proxy behavior for panel, library, playback, and control
 - Invalid, oversized, duplicate, and interrupted uploads
-- Restart with persistent music storage
+- Restart with persistent music storage (queue/loop/volume intentionally reset)
 
 Update `README.md` and `AGENTS.md` in the same release. Explicitly record any live behavior that could not be verified.
+
+## Playback-controls release (queue, loop, volume, durations)
+
+Status: Implemented with automated tests only; live Discord/proxy verification outstanding.
+
+- Extended `voice-session.js` into a serialized playback state machine with current track, pending queue (max 100, duplicates allowed), loop-current, volume (0–100 via `inlineVolume`), revisioned snapshots, generation-guarded Idle/error handling, and revalidation of queued files at start.
+- Added `media-metadata.js` for cached FFprobe durations (path/size/mtime key, bounded concurrency, short timeout, `null` for unknown without breaking the panel).
+- Added authenticated `GET /api/playback` and `GET /api/library`; extended `POST /api/control` with `enqueue`, `skip`, `remove`, `clearQueue`, `setLoop`, and `setVolume`, all behind Basic Auth plus CSRF and mutation rate limiting, returning enriched snapshots without absolute paths.
+- Rebuilt the panel with now-playing/target/elapsed, volume slider, loop toggle, Play Now/Queue per track, queue list with remove/clear, and inline status; browser uses relative URLs and `textContent`-only DOM updates with periodic refresh while visible.
+- Discord `!play` remains immediate replacement (clearing the queue); no new Discord commands. Queued sessions stay in-channel; idle web actions reuse the first-human-channel rule, now displayed.
+- Validation follow-ups: cross-target Play Now preserves loop mode (only stop/departure/disconnect/shutdown clear loop); failed joins leave no ghost queue entry and idle enqueue without a target rejects with the no-target 409 instead of queueing; `enqueueWeb` carries a fallback target so a stale connection snapshot cannot ghost; the panel loads library durations once and polls playback separately with in-flight guards, and the metadata cache deduplicates concurrent probes for the same file.
+- Non-force dependency patch: Multer 2.2.0 to 2.4.0 with transitive `qs` 6.15.3 to 6.16.0 via `npm audit fix --omit=dev`; `npm audit --omit=dev` reports zero findings and the upload regression suite passes.
+- Automated coverage grew from 44 to 77 tests (queue/loop/volume/snapshot, durations/cache/dedup, playback/library/control validation including the no-target 409, CSRF/rate limiting, proxy routing, escaping, stale events, deleted files, concurrency, loop preservation, and ghost-queue rejection). Live non-production Discord testing of play, queue advance, loop, skip, volume, stop, target movement, last-human departure, reconnect, shutdown, plus direct and `/discord/` proxy checks and production CPU observation for `inlineVolume`, remain release gates.
 
 ## Next steps after stabilization
 
@@ -346,8 +362,8 @@ These are separate product improvements, not prerequisites for securing the curr
 1. **Slash commands and autocomplete.** Replace privileged message-content parsing with `/play`, `/stop`, `/list`, and track/category autocomplete.
 2. **Explicit web target selection.** Show available guilds and voice channels, require an operator choice, and display the current session and track.
 3. **Discord OAuth for the panel.** Replace a shared Basic Auth secret with Discord identity and guild/role authorization when the panel has multiple users.
-4. **Library administration.** Add authenticated delete, rename, category creation, duplicate replacement, search, and metadata display using the same storage and escaping rules.
-5. **Playback controls.** Add now-playing status, volume, pause/resume, replay, random selection, and a small queue after session ownership is stable.
+4. **Library administration.** Add authenticated delete, rename, category creation, duplicate replacement, search, and metadata display using the same storage and escaping rules. Durations are already displayed via the cached FFprobe boundary.
+5. **Playback controls.** Now-playing status, volume, loop-current, and a small queue are implemented. Remaining candidates are pause/resume, replay beyond loop-current, random selection, and per-guild targeting after session ownership is stable.
 6. **True multi-guild playback, if required.** Replace the global session with a guild-to-session map and require every web action to select a guild and channel.
 7. **Metadata persistence.** Introduce SQLite only when aliases, tags, favorites, playlists, uploader identity, or audit history require data beyond filenames.
 8. **Operational maturity.** Add container packaging, continuous integration, automated dependency updates, backup verification, metrics, and alerts.

@@ -122,7 +122,7 @@ function createDiscordAdapter({
     if (!filePath) return sendReply(message, "File not found.");
 
     try {
-      await voiceSession.play({ guild: message.guild, channel: voiceChannel, filePath });
+      await voiceSession.play({ guild: message.guild, channel: voiceChannel, filePath, song: name });
       return sendReply(message, `Playing ${sanitizeDiscordText(name)}`);
     } catch (err) {
       logger.error("Discord play failed:", err);
@@ -187,8 +187,33 @@ function createDiscordAdapter({
       throw new Error("The bot can't play music from the website unless at least one human user is inside a Discord Voice Channel first!");
     }
     logger.log(`Web Control: Playing "${song}" in channel ${target.channel.name}`);
-    await voiceSession.play({ guild: target.guild, channel: target.channel, filePath });
+    await voiceSession.play({ guild: target.guild, channel: target.channel, filePath, song });
     return `Playing ${song}`;
+  }
+
+  async function enqueueWeb(song, filePath) {
+    const activeConnection = typeof voiceSession.getState === "function"
+      ? voiceSession.getState().connection
+      : null;
+    const fallbackTarget = findWebTarget();
+    if (activeConnection) {
+      if (fallbackTarget) {
+        logger.log(`Web Control: Queueing "${song}" in channel ${fallbackTarget.channel.name}`);
+        return voiceSession.enqueue({
+          guild: fallbackTarget.guild,
+          channel: fallbackTarget.channel,
+          song,
+          filePath,
+        });
+      }
+      logger.log(`Web Control: Queueing "${song}"`);
+      return voiceSession.enqueue({ song, filePath });
+    }
+    if (!fallbackTarget) {
+      throw new Error("The bot can't play music from the website unless at least one human user is inside a Discord Voice Channel first!");
+    }
+    logger.log(`Web Control: Queueing "${song}" in channel ${fallbackTarget.channel.name}`);
+    return voiceSession.enqueue({ guild: fallbackTarget.guild, channel: fallbackTarget.channel, song, filePath });
   }
 
   function attach() {
@@ -206,9 +231,16 @@ function createDiscordAdapter({
 
   return {
     attach,
+    clearQueueWeb: () => voiceSession.clearQueue(),
+    enqueueWeb,
     findWebTarget,
+    getPlaybackSnapshot: () => voiceSession.getSnapshot(),
     handleMessage,
     playWeb,
+    removeQueuedWeb: (id) => voiceSession.removeQueued(id),
+    setLoopWeb: (enabled) => voiceSession.setLoop(enabled),
+    setVolumeWeb: (percent) => voiceSession.setVolume(percent),
+    skipWeb: () => voiceSession.skip(),
     stopWeb: () => voiceSession.stop(),
   };
 }

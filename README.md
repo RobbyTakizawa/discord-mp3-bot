@@ -11,26 +11,30 @@ A small Discord soundboard bot that plays MP3 files from a local `music/` direct
 - Upload MP3s through an HTTP Basic Auth-protected web panel.
 - Validate bounded uploads in a private staging area and reject unsafe or duplicate destinations.
 - Use the web panel to play a track in the first voice channel that contains a human user.
+- Queue up to 100 tracks, skip the current track, loop the current track, and adjust volume (0–100) from the web panel.
+- Display cached FFprobe durations and live now-playing/elapsed status in the web panel.
 - Disconnect automatically when the bot is alone in its voice channel.
 - Run a real local regression suite with `npm test`.
 
-Playback is intentionally simple: one global voice session owns one audio player and at most one Discord voice connection. Starting a track replaces the current track and moves that session when a different guild or channel is selected. There is no queue or simultaneous per-server playback.
+Playback is intentionally simple: one global voice session owns one audio player, at most one Discord voice connection, one queue, one loop flag, and one volume setting. **Play Now** (and Discord `!play`) immediately replaces the current track and clears the pending queue; **Add to Queue** appends and starts immediately when idle. Looping repeats the current track while the queue waits; **Skip** advances even while looping. **Stop** clears playback, queue, and loop mode and disconnects. Queue, loop, and volume are in-memory only and reset on restart. There is no simultaneous per-server playback.
 
 ## Accepted stabilization contract
 
-The behavior decisions for the stabilization work are frozen. The voice lifecycle and command-adapter items below are implemented and covered by local tests; later stabilization work remains tracked in the roadmap:
+The behavior decisions for the stabilization work are frozen, as extended by the playback-controls release below. The voice lifecycle and command-adapter items below are implemented and covered by local tests; later stabilization work remains tracked in the roadmap:
 
-- One global voice session owns one player, at most one voice connection, one target channel, and one current track.
-- A successful Discord or web play request replaces the current track and moves that session when the selected target changes.
-- Discord play targets the caller's current voice channel. Web play temporarily keeps its existing first-cached-channel-with-a-human selection rule.
-- Discord stop, web stop, last-human departure, and graceful shutdown all clear the same global session. Stopping an already stopped session succeeds harmlessly.
-- The catalog remains filesystem-only: root tracks are labeled `uncategorized`, categories are one directory deep, and only lowercase `.mp3` filenames at those depths are discoverable and playable.
+- One global voice session owns one player, at most one voice connection, one target channel, one current track, one pending queue (max 100), one loop-current flag, and one volume (0–100, default 100).
+- A successful Discord or web **Play Now** request replaces the current track, clears the pending queue, and moves that session when the selected target changes. Discord `!play` keeps this replacement meaning and clears the web queue; no new Discord commands were added.
+- Web **Add to Queue** appends (duplicates allowed); when nothing is playing it starts immediately. A queued session stays in its current voice channel; when idle, web actions reuse the existing first-cached-channel-with-a-human selection rule.
+- **Skip** starts the next queued entry even while looping is enabled. While looping, natural completion recreates the current track with a fresh audio resource and the queue waits.
+- Discord stop, web stop, last-human departure, unrecoverable disconnect, and graceful shutdown all clear playback, queue, and loop state. Stopping an already stopped session succeeds harmlessly.
+- Volume applies immediately to the current resource (via `inlineVolume`) and to future tracks, and persists in memory until restart.
+- The catalog remains filesystem-only: root tracks are labeled `uncategorized`, categories are one directory deep, and only lowercase `.mp3` filenames at those depths are discoverable and playable. Queued files are revalidated for containment and existence when they start; missing files are skipped.
 - Uploads reject an existing destination instead of overwriting it implicitly.
-- Every web route remains protected by Basic Auth behind HTTPS.
+- Every web route remains protected by Basic Auth behind HTTPS. Read-only `GET /api/playback` and `GET /api/library` require auth; all `POST /api/control` mutations require auth, CSRF, and the mutation rate limiter.
 - Browser actions use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
-- The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; queues, simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
+- The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
-The remaining deployment work and live verification gates are documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). Phase 5 was closed by owner direction without performing live Discord play, movement, stop, departure, reconnection, or shutdown verification; those checks remain release gates.
+The remaining deployment work and live verification gates are documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). Phase 5 was closed by owner direction without performing live Discord play, movement, stop, departure, reconnection, or shutdown verification; those checks remain release gates. The queue/loop/volume/duration release below was verified with automated tests only; live Discord and proxy verification remain outstanding.
 
 ## Repository layout
 
@@ -38,15 +42,16 @@ The remaining deployment work and live verification gates are documented under *
 | --- | --- |
 | `index.js` | Process composition, Discord login, HTTP startup, and graceful shutdown wiring. |
 | `discord-adapter.js` | Discord command parsing, safe replies, optional access policy, event translation, and web voice-target selection. |
-| `voice-session.js` | Serialized global ownership of the audio player, voice connection, target, resource, and lifecycle. |
+| `voice-session.js` | Serialized global ownership of the audio player, voice connection, target, current track/resource, queue, loop, volume, and playback snapshots. |
 | `config.js` | Environment configuration parsing and startup validation. |
 | `catalog.js` | Music discovery and containment-checked playback identifiers. |
+| `media-metadata.js` | Cached FFprobe duration lookups by path, size, and mtime with bounded concurrency. |
 | `render.js` | Escaped server-rendered control-panel HTML. |
-| `web-app.js` | Testable Express application, authentication, upload, and control routes. |
+| `web-app.js` | Testable Express application, authentication, upload, library/playback, and control routes. |
 | `upload-storage.js` | Upload naming policy, path containment, staging, FFprobe validation, and exclusive publication. |
 | `runtime-preflight.js` | Startup checks for FFmpeg, FFprobe, and the configured Opus encoder. |
 | `operational-logger.js` | Secret-conscious JSON logging for startup, shutdown, Discord readiness, and HTTP requests. |
-| `test/` | Node built-in test-runner coverage for bootstrap/readiness, structured logging, commands, configuration, catalog, voice transitions, authentication, rendering, routing, and hardened uploads. |
+| `test/` | Node built-in test-runner coverage for bootstrap/readiness, structured logging, commands, configuration, catalog, voice transitions, queue/loop/volume, durations, authentication, rendering, routing, and hardened uploads. |
 | `music/` | Runtime MP3 library. It is created automatically and ignored by Git. |
 | `package.json` | Node.js dependencies and package metadata. |
 | `.gitignore` | Excludes dependencies, local environment configuration, and runtime music. |
@@ -148,7 +153,9 @@ The Express server implements these authenticated operator routes:
 
 - `GET /` - renders the upload and playback panel.
 - `POST /upload` - stores an uploaded MP3.
-- `POST /api/control` - starts or stops playback.
+- `POST /api/control` - starts or stops playback, manages the queue, loop, and volume. Supported `action` values are `play` (Play Now, clears queue), `enqueue` (Add to Queue), `skip`, `remove` (with numeric `id`), `clearQueue`, `setLoop` (with boolean `enabled`), and `setVolume` (with integer `volume` 0–100). Successful mutations return `{ message, snapshot }`.
+- `GET /api/playback` - returns `{ snapshot }` with status, target names, current track plus elapsed/duration, queue with durations, volume, loop, and revision. No CSRF or mutation rate limit applies.
+- `GET /api/library` - returns `{ tracks: [{ song, category, durationMs }] }` with cached durations (`null` when unknown). No CSRF or mutation rate limit applies.
 
 It also exposes two minimal unauthenticated operational probes so a local process manager or reverse proxy can observe startup without storing the panel password:
 
@@ -181,7 +188,7 @@ The application listens on loopback by default, which fits a reverse proxy runni
 
 Opening `http://localhost:3000/` directly now keeps upload, control, and back-link actions at the direct Express root. The same HTML also works beneath the documented `/discord/` proxy prefix.
 
-Web playback searches all connected Discord servers and selects the first voice channel containing at least one non-bot member. A user must therefore join a voice channel before pressing **Play**. The web **Stop** action clears the same global session as Discord `!stop`.
+Web playback searches all connected Discord servers and selects the first voice channel containing at least one non-bot member. A user must therefore join a voice channel before pressing **Play Now** or **Add to Queue** when the session is idle; queued requests stay in the current channel once playback has started. The panel displays the active guild/channel names, now-playing track with elapsed/total time, volume, loop state, and the pending queue. The web **Stop** action clears the same global session (including queue and loop) as Discord `!stop`. Durations are probed with FFprobe on demand and cached by path, size, and mtime; unknown durations appear as `?:??` without breaking the panel.
 
 ## Persistent storage, backup, and restore
 
@@ -239,7 +246,14 @@ If post-restore checks fail, stop only `discord-mp3-bot.service`, move the resto
 1. A user sends `!play <track>` while in a voice channel.
 2. The bot resolves the identifier under `music/` and rejects paths outside that directory.
 3. The global session reuses its connection only when the target guild and channel are unchanged; otherwise it destroys the old connection and joins the selected channel.
-4. The audio player starts the MP3 and replaces any current resource. Play and stop operations are serialized to prevent web and Discord control races.
+4. The audio player starts the MP3 with `inlineVolume` and replaces any current resource, clearing the pending web queue. Play, queue, skip, loop, volume, and stop operations are serialized to prevent web and Discord control races.
+5. When the track ends naturally, the session advances to the next queued entry, repeats the current track when looping, or goes idle while keeping the connection.
+
+### Browser playback
+
+1. Basic Auth validates `WEB_USER` and `WEB_PASS`; state-changing control requests also require the CSRF token and pass the mutation rate limiter.
+2. **Play Now** resolves the identifier and replaces playback (clearing the queue). **Add to Queue** appends (max 100, duplicates allowed) and starts immediately when idle.
+3. The panel polls `GET /api/playback` and `GET /api/library` with relative URLs, shows target names, elapsed/total time (estimating locally between polls), volume, loop, and queue, and reports errors inline.
 
 ### Browser upload
 
@@ -263,8 +277,10 @@ This repository is an early, single-process implementation. Keep these constrain
 - Uploads can target only the root or an existing immediate category; the panel does not create categories.
 - Discord command allowlists, controller-role checks, and cooldowns are disabled unless configured; the default deployment therefore permits commands from every user and server the bot can see.
 - Playback is intentionally global: a play request from another guild or channel moves and replaces the current session rather than creating simultaneous playback.
-- The web player's target-channel choice depends on cache iteration order and is not user-selectable.
-- Voice lifecycle transitions are covered with fakes, but live Discord play, channel movement, reconnect behavior, last-human departure, and signal-driven shutdown have not been verified in this workspace. Phase 5 was marked complete by owner direction without implying those checks ran.
+- Queue, loop, and volume are in-memory only and disappear on restart; there is no persistence, pause/resume, shuffle, per-track repeat of queued items beyond loop-current, or simultaneous multi-guild playback.
+- The web player's target-channel choice depends on cache iteration order and is displayed but not user-selectable.
+- Volume uses `inlineVolume`, which adds CPU overhead on top of the pure-JS Opus encoder; observe production CPU while changing volume.
+- Voice lifecycle transitions are covered with fakes, but live Discord play, queue advance, loop, skip, volume, channel movement, reconnect behavior, last-human departure, and signal-driven shutdown have not been verified in this workspace. Phase 5 was marked complete by owner direction without implying those checks ran; the playback-controls release is likewise automated-tests only.
 
 Treat the web panel as trusted-administrator tooling because it still relies on a shared Basic Auth credential. Keep it behind the documented HTTPS deployment boundary.
 
@@ -279,4 +295,4 @@ node --check index.js
 npm test
 ```
 
-For behavior changes, manually verify `!list`, `!play`, `!stop`, authenticated upload, web playback, and automatic voice disconnection in a non-production Discord server.
+For behavior changes, manually verify `!list`, `!play`, `!stop`, authenticated upload, web Play Now, queue advance, loop, skip, volume, stop clearing queue/loop, and automatic voice disconnection in a non-production Discord server, plus direct and `/discord/` proxy behavior.

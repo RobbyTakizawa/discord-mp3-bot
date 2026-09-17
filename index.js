@@ -16,6 +16,7 @@ const { createOperationalLogger } = require("./operational-logger");
 const { createWebApp } = require("./web-app");
 const { runRuntimePreflight } = require("./runtime-preflight");
 const { createVoiceSession } = require("./voice-session");
+const { createMediaMetadata } = require("./media-metadata");
 
 function createDiscordClient() {
   return new Client({
@@ -67,6 +68,7 @@ function createRuntime(config, dependencies = {}) {
     entersState: dependencies.entersState || entersState,
     joinVoiceChannel: dependencies.joinVoiceChannel || joinVoiceChannel,
     logger,
+    musicDir: config.musicDir,
   });
 
   const discordAdapter = dependencies.discordAdapter || createDiscordAdapter({
@@ -78,12 +80,24 @@ function createRuntime(config, dependencies = {}) {
   });
   discordAdapter.attach();
 
+  const mediaMetadata = dependencies.mediaMetadata || createMediaMetadata();
   const app = createWebApp({
     config,
     catalog,
     logger,
     runtimeState,
-    controlHandlers: { play: discordAdapter.playWeb, stop: discordAdapter.stopWeb },
+    mediaMetadata,
+    controlHandlers: {
+      play: discordAdapter.playWeb,
+      stop: discordAdapter.stopWeb,
+      enqueue: discordAdapter.enqueueWeb,
+      skip: discordAdapter.skipWeb,
+      removeQueued: discordAdapter.removeQueuedWeb,
+      clearQueue: discordAdapter.clearQueueWeb,
+      setLoop: discordAdapter.setLoopWeb,
+      setVolume: discordAdapter.setVolumeWeb,
+      getSnapshot: discordAdapter.getPlaybackSnapshot,
+    },
   });
 
   const runtime = {

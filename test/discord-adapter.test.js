@@ -165,5 +165,5 @@ test("web playback targets the first voice channel containing a human", async ()
   client.guilds.cache.set(guild.id, guild);
 
   assert.equal(await adapter.playWeb("track", "/music/track.mp3"), "Playing track");
-  assert.deepEqual(calls.plays[0], { guild, channel, filePath: "/music/track.mp3" });
+  assert.deepEqual(calls.plays[0], { guild, channel, filePath: "/music/track.mp3", song: "track" });
 });

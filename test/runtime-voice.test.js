@@ -86,6 +86,7 @@ test("Discord commands and voice-state events use the shared voice session", asy
     guild,
     channel,
     filePath: path.join(musicDir, "sound.mp3"),
+    song: "sound",
   });
 
   assert.equal(await emitMessage(client, { content: "!stop", guild }), "Stopped.");

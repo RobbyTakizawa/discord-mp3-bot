@@ -221,6 +221,7 @@ test("resource completion clears current resource without dropping the connectio
   await harness.session.play({ ...target, filePath: "one.mp3" });
 
   harness.player.emit("stateChange", { status: AudioPlayerStatus.Playing }, { status: AudioPlayerStatus.Idle });
+  await harness.session.whenSettled();
 
   assert.equal(harness.session.getState().currentResource, null);
   assert.equal(harness.session.getState().connection, harness.connections[0]);
