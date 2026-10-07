@@ -26,12 +26,16 @@ One Node.js process owns all runtime behavior:
 - Catalog functions in `catalog.js` rescan the filesystem synchronously when requested; durations are enriched asynchronously by `web-app.js`.
 - `web-app.js` constructs the Express application without listening; `runtime-preflight.js` checks FFmpeg, FFprobe, and Opus; `index.js` owns process startup and Discord login.
 - `operational-logger.js` emits concise JSON lifecycle and request events while omitting secret-named fields. Each HTTP response receives a generated request ID; request logs do not include query strings, credentials, cookies, or bodies.
+- `downtime-store.js` owns per-guild, per-user feat goals, dice rolls, undo history, and scoreboard snapshots. It writes `music/.downtime-progress.json` by atomic replacement; malformed data fails startup rather than resetting progress.
 
 Runtime data is filesystem-only. `music/` is created at startup and ignored by Git. Queue, loop, and volume are in-memory only and reset on restart. There is no database, cloud storage, pause/resume, or per-guild player state.
 
+Downtime progress is persistent data within `music/`, so the existing music backup/restore archive must include `.downtime-progress.json`. Do not edit that file while the bot is running.
+
 ## Current supported behavior contract
 
-- `!help`, `!list`, `!play`, and `!stop` are the supported Discord commands.
+- `!help`, `!list`, `!play`, and `!stop` are the playback Discord commands. Downtime commands are `!downtime_goal`, `!roll_downtime`, `!downtime_progress`, `!downtime_scoreboard`, and `!undo_downtime`.
+- Each Discord user has at most one active downtime goal per guild. Origin and general feat targets default to 20 and 40 points; anyone may set an integer override. Replacing a goal loses its progress. Rolls use bounded `xdy+n` syntax, announce each die and total, and credit that total to the goal. Completion discards excess points. Anyone may undo only their own latest non-undone roll on their current goal; undo is public and can reopen a completed goal. Scoreboards show latest goals in the current guild and are chunked to Discord's message limit.
 - Command names are case-insensitive; Discord replies suppress mentions and reply pings, escape filesystem-derived Markdown/control characters, and chunk long catalog output to 2,000 characters.
 - Optional guild allowlists, controller-role restrictions for play/stop, and per-user cooldowns are disabled by default.
 - A Discord `!play` caller must already be in a voice channel.
@@ -69,7 +73,7 @@ Phase 1 behavior decisions are complete, as extended by the playback-controls re
 - The web uploader rejects duplicate final destinations by default. Replacement requires a separate explicit future operation.
 - Basic Auth remains on every web route and HTTPS remains mandatory at the deployment boundary.
 - Generated form actions, control/playback/library requests, and back links use relative URLs and work from both the direct Express root and a prefix-stripping `/discord/` reverse proxy.
-- Supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; no simultaneous multi-guild playback, nested catalog, database, cloud storage, or remote URL ingestion is introduced. Queue/loop/volume/durations are the only post-stabilization playback additions.
+- The frozen stabilization baseline supported `!help`, `!list`, `!play`, and `!stop`. Downtime commands were added later without changing the playback contract; no simultaneous multi-guild playback, nested catalog, database, cloud storage, or remote URL ingestion is introduced. Queue/loop/volume/durations are the only post-stabilization playback additions.
 
 The global session, unified stop paths, target movement, serialized operations, disconnect handling, and graceful shutdown wiring are implemented. Keep the outstanding live Discord verification visible as a Phase 9 release gate until it is performed; never imply that Phase 5's administrative closeout or the playback-controls automated suite means the live checks ran.
 
@@ -200,6 +204,7 @@ Use a targeted manual checklist as applicable:
 - Bot logs in and the Express listener starts with valid configuration.
 - `!list` reflects root and first-level category MP3s.
 - `!play` rejects missing files and callers outside voice.
+- Downtime goals, rolls, completion, undo, and guild-scoped scoreboards work in a non-production Discord server; verify persistence across a restart and that only a user's own rolls can be undone.
 - Playback starts, replacement playback works, queue advance/loop/skip/volume behave, and `!stop` disconnects and clears queue/loop.
 - The bot disconnects when the last human leaves.
 - Web routes reject missing or invalid Basic Auth; `GET /api/playback` and `GET /api/library` require auth while `POST /api/control` also requires CSRF and mutation rate limiting.

@@ -15,6 +15,7 @@ A small Discord soundboard bot that plays MP3 files from a local `music/` direct
 - Display cached FFprobe durations and live now-playing/elapsed status in the web panel.
 - Disconnect automatically when the bot is alone in its voice channel.
 - Run a real local regression suite with `npm test`.
+- Track per-player downtime feat goals, dice rolls, progress, and public scoreboards in Discord.
 
 Playback is intentionally simple: one global voice session owns one audio player, at most one Discord voice connection, one queue, one loop flag, and one volume setting. **Play Now** (and Discord `!play`) immediately replaces the current track and clears the pending queue; **Add to Queue** appends and starts immediately when idle. Looping repeats the current track while the queue waits; **Skip** advances even while looping. **Stop** clears playback, queue, and loop mode and disconnects. Queue, loop, and volume are in-memory only and reset on restart. There is no simultaneous per-server playback.
 
@@ -32,7 +33,7 @@ The behavior decisions for the stabilization work are frozen, as extended by the
 - Uploads reject an existing destination instead of overwriting it implicitly.
 - Every web route remains protected by Basic Auth behind HTTPS. Read-only `GET /api/playback` and `GET /api/library` require auth; all `POST /api/control` mutations require auth, CSRF, and the mutation rate limiter.
 - Browser actions use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
-- The supported Discord commands remain `!help`, `!list`, `!play`, and `!stop`; simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
+- The playback commands remain `!help`, `!list`, `!play`, and `!stop`; downtime tracking adds separate Discord commands. Simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
 The remaining deployment work and live verification gates are documented under **Current limitations and security notes** and in [`ROADMAP.md`](ROADMAP.md). Phase 5 was closed by owner direction without performing live Discord play, movement, stop, departure, reconnection, or shutdown verification; those checks remain release gates. The queue/loop/volume/duration release below was verified with automated tests only; live Discord and proxy verification remain outstanding.
 
@@ -42,6 +43,7 @@ The remaining deployment work and live verification gates are documented under *
 | --- | --- |
 | `index.js` | Process composition, Discord login, HTTP startup, and graceful shutdown wiring. |
 | `discord-adapter.js` | Discord command parsing, safe replies, optional access policy, event translation, and web voice-target selection. |
+| `downtime-store.js` | Persistent per-server downtime goals, rolls, undo, and scoreboard data. |
 | `voice-session.js` | Serialized global ownership of the audio player, voice connection, target, current track/resource, queue, loop, volume, and playback snapshots. |
 | `config.js` | Environment configuration parsing and startup validation. |
 | `catalog.js` | Music discovery and containment-checked playback identifiers. |
@@ -144,8 +146,20 @@ Catalog discovery only includes lowercase `.mp3` files at the root or directly i
 | `!play <name>` | Plays a root track in the caller's current voice channel. |
 | `!play <category/name>` | Plays a categorized track in the caller's current voice channel. |
 | `!stop` | Stops playback and destroys the single global voice connection, regardless of which Discord server started it. |
+| `!downtime_goal set <origin\|general> <feat name> [--points N]` | Starts one active goal with a default target of 20 or 40 points, or a custom target. |
+| `!downtime_goal replace <origin\|general> <feat name> [--points N]` | Replaces the active goal and loses its progress. |
+| `!roll_downtime <x>dy[+n]` | Rolls dice, posts each die and the total, and adds points to the caller's active goal. |
+| `!downtime_progress` | Shows the caller's current or latest completed goal. |
+| `!downtime_scoreboard` | Shows all participants' latest goal progress in the current server. |
+| `!undo_downtime` | Undoes the caller's latest non-undone roll on their current goal; the reversal is public. |
 
 Commands are case-insensitive after the `!` prefix, and repeated whitespace in arguments is normalized. Bot replies suppress mentions and reply pings and escape filesystem-derived Markdown. Guild allowlists, controller-role restrictions for `!play` and `!stop`, and per-user cooldowns are available through the optional configuration above; all three restrictions are disabled by default.
+
+Downtime commands are available to every user in an allowed server; the playback controller-role restriction does not apply. Use a feat name of 1–80 characters and an optional target of 1–1,000,000 points. Dice syntax accepts 1–100 dice with 2–1000 sides and an optional nonnegative modifier up to 10,000, such as `2d6+1`. The player chooses the formula based on the downtime duration; the bot does not assign or limit downtime periods. Each roll is visible in the channel. Reaching the target completes the feat and discards excess points. A completed goal remains on the scoreboard until a new goal is set. Undo marks a roll as undone in the saved history; undoing a completing roll reopens that goal. Players may undo and reroll, so the public roll and undo messages are the group's review trail. Once a new goal has been set, rolls on an older goal cannot be undone. Scoreboard results are sorted by percentage complete and split to fit Discord's message limit.
+
+Feat names may contain spaces. For example, `!downtime_goal set general Heavy Armor Master` starts that goal at 40 points; add `--points 45` at the end to override the target.
+
+Downtime data is stored in `music/.downtime-progress.json` and survives bot restarts. Back up and restore it with the `music/` directory. If that file is malformed, startup fails rather than silently resetting progress. Keep the bot's service account able to write to `music/` and avoid editing the file while the bot is running.
 
 ## Web panel and reverse proxy
 
@@ -264,7 +278,7 @@ If post-restore checks fail, stop only `discord-mp3-bot.service`, move the resto
 5. FFprobe must identify an MP3 audio stream, then FFmpeg decodes up to the first 30 seconds. Both checks share a ten-second timeout. A valid file is published without overwriting any existing destination; invalid, duplicate, oversized, failed, and aborted uploads are removed from staging.
 6. The catalog is rebuilt from disk on the next page load or `!list` command.
 
-Tracks live only on the local filesystem; there is no database, object storage, metadata store, or automated backup process.
+Tracks and downtime progress live only on the local filesystem; there is no database, object storage, or automated backup process.
 
 ## Current limitations and security notes
 

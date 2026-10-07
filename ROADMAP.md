@@ -369,6 +369,8 @@ These are separate product improvements, not prerequisites for securing the curr
 8. **Operational maturity.** Add container packaging, continuous integration, automated dependency updates, backup verification, metrics, and alerts.
 9. **Storage scaling.** Consider object storage or background media processing only if a local persistent volume no longer fits the workload.
 
+The post-stabilization downtime feature now has per-guild feat goals, public dice rolls, self-undo, progress, and scoreboards. Its JSON data lives under `music/` and is covered by the same backup path. Live non-production Discord verification is still outstanding.
+
 ## Explicit non-goals
 
 - Adding remote URL ingestion

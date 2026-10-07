@@ -1,4 +1,5 @@
 const fs = require("fs");
+const path = require("path");
 
 const { Client, GatewayIntentBits } = require("discord.js");
 const {
@@ -12,6 +13,7 @@ const {
 const { loadConfig, validateConfig } = require("./config");
 const { createCatalog } = require("./catalog");
 const { createDiscordAdapter } = require("./discord-adapter");
+const { createDowntimeStore } = require("./downtime-store");
 const { createOperationalLogger } = require("./operational-logger");
 const { createWebApp } = require("./web-app");
 const { runRuntimePreflight } = require("./runtime-preflight");
@@ -56,6 +58,9 @@ function createRuntime(config, dependencies = {}) {
   fs.mkdirSync(config.musicDir, { recursive: true });
 
   const catalog = dependencies.catalog || createCatalog({ musicDir: config.musicDir });
+  const downtimeStore = dependencies.downtimeStore || createDowntimeStore({
+    filePath: path.join(config.musicDir, ".downtime-progress.json"),
+  });
   const client = dependencies.client || createDiscordClient();
   const player = dependencies.player || createAudioPlayer({
     behaviors: { noSubscriber: NoSubscriberBehavior.Stop },
@@ -76,6 +81,7 @@ function createRuntime(config, dependencies = {}) {
     catalog,
     config,
     voiceSession,
+    downtimeStore,
     logger,
   });
   discordAdapter.attach();
@@ -106,6 +112,7 @@ function createRuntime(config, dependencies = {}) {
     client,
     config,
     discordAdapter,
+    downtimeStore,
     logger,
     player,
     runtimeState,

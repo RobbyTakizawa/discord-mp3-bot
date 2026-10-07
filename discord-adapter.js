@@ -1,5 +1,10 @@
 const DISCORD_MESSAGE_LIMIT = 2000;
-const SUPPORTED_COMMANDS = new Set(["help", "list", "play", "stop"]);
+const { parseDice, parseGoal } = require("./downtime-store");
+
+const SUPPORTED_COMMANDS = new Set([
+  "help", "list", "play", "stop", "downtime_goal", "roll_downtime",
+  "downtime_progress", "downtime_scoreboard", "undo_downtime",
+]);
 const CONTROL_COMMANDS = new Set(["play", "stop"]);
 const MARKDOWN_CHARACTERS = new Set(["\\", "`", "*", "_", "~", "|", "[", "]", "(", ")", "<", ">", "#"]);
 
@@ -82,6 +87,7 @@ function createDiscordAdapter({
   catalog,
   config,
   voiceSession,
+  downtimeStore,
   logger = console,
   now = Date.now,
 }) {
@@ -130,6 +136,67 @@ function createDiscordAdapter({
     }
   }
 
+  function formatProgress(goal) {
+    if (!goal) return "No downtime goal set. Use !downtime_goal set <origin|general> <feat name> [--points N].";
+    const label = `${sanitizeDiscordText(goal.name)} (${goal.type})`;
+    if (goal.status === "completed") return `${label}: completed at ${goal.target}/${goal.target} points.`;
+    return `${label}: ${goal.points}/${goal.target} points; ${goal.target - goal.points} remaining.`;
+  }
+
+  async function handleDowntime(message, parsed) {
+    if (!downtimeStore) return sendReply(message, "Downtime tracking is unavailable.");
+    if (!message.guild?.id || !message.author?.id) return sendReply(message, "Use downtime commands in a server.");
+    const guildId = message.guild.id;
+    const userId = message.author.id;
+    const displayName = message.member?.displayName || message.author.username || userId;
+    try {
+      if (parsed.command === "downtime_goal") {
+        const request = parseGoal(parsed.argument);
+        const goal = downtimeStore.setGoal(guildId, userId, displayName, request);
+        return sendReply(message, `Downtime goal ${request.action === "replace" ? "replaced" : "set"}: ${formatProgress(goal)}`);
+      }
+      if (parsed.command === "roll_downtime") {
+        const dice = parseDice(parsed.argument);
+        const outcome = downtimeStore.roll(guildId, userId, displayName, message.id, dice);
+        if (outcome.duplicate) return sendReply(message, "This downtime roll was already recorded.");
+        const { goal, roll } = outcome;
+        const detail = `${roll.expression} → [${roll.results.join(", ")}]${roll.modifier ? ` + ${roll.modifier}` : ""} = ${roll.total}`;
+        return sendReply(message, `${detail}. ${formatProgress(goal)}${goal.status === "completed" ? " Feat earned! Excess points are lost." : ""}`);
+      }
+      if (parsed.command === "downtime_progress") {
+        if (parsed.argument) throw new Error("Use: !downtime_progress.");
+        return sendReply(message, formatProgress(downtimeStore.progress(guildId, userId)));
+      }
+      if (parsed.command === "undo_downtime") {
+        if (parsed.argument) throw new Error("Use: !undo_downtime (your own latest roll only).");
+        const { goal, roll } = downtimeStore.undo(guildId, userId, displayName);
+        return sendReply(message, `Undid your ${roll.expression} roll of ${roll.total} points. ${formatProgress(goal)}`);
+      }
+      if (parsed.argument) throw new Error("Use: !downtime_scoreboard.");
+      const rows = downtimeStore.scoreboard(guildId).sort((a, b) => {
+        const aPercent = a.goal.points / a.goal.target;
+        const bPercent = b.goal.points / b.goal.target;
+        return bPercent - aPercent || a.displayName.localeCompare(b.displayName) || a.userId.localeCompare(b.userId);
+      });
+      if (rows.length === 0) return sendReply(message, "No downtime goals yet.");
+      const lines = ["Downtime scoreboard:", ...rows.map(({ userId: id, displayName: name, goal }) => {
+        const player = sanitizeDiscordText(name || id);
+        const feat = sanitizeDiscordText(goal.name);
+        const status = goal.status === "completed" ? " — completed" : "";
+        return `${player} (${id}): ${feat} — ${goal.points}/${goal.target} (${Math.floor(100 * goal.points / goal.target)}%)${status}`;
+      })];
+      const chunks = chunkLines(lines);
+      await sendReply(message, chunks[0]);
+      for (const chunk of chunks.slice(1)) await message.channel.send(messagePayload(chunk));
+      return;
+    } catch (err) {
+      if (err instanceof Error && !["SyntaxError", "TypeError"].includes(err.name)
+        && !err.code) return sendReply(message, err.message);
+      logger.error("Discord downtime command failed:", err);
+      return sendReply(message, "Downtime tracking failed. No progress was changed.");
+    }
+  }
+
   async function handleMessage(message) {
     if (message.author?.bot) return;
     const parsed = parseCommand(message.content, config.prefix);
@@ -147,7 +214,7 @@ function createDiscordAdapter({
 
     if (parsed.command === "help") {
       const prefix = sanitizeDiscordText(config.prefix);
-      return sendReply(message, `Commands:\n${prefix}list\n${prefix}play <category/name or name>\n${prefix}stop`);
+      return sendReply(message, `Commands:\n${prefix}list\n${prefix}play <category/name or name>\n${prefix}stop\n${prefix}downtime_goal <set|replace> <origin|general> <feat name> [--points N]\n${prefix}roll_downtime <x>dy[+n]\n${prefix}downtime_progress\n${prefix}downtime_scoreboard\n${prefix}undo_downtime`);
     }
 
     if (parsed.command === "list") {
@@ -160,6 +227,8 @@ function createDiscordAdapter({
       }
       return playDiscord(message, parsed.argument);
     }
+
+    if (parsed.command !== "stop") return handleDowntime(message, parsed);
 
     try {
       await voiceSession.stop();
