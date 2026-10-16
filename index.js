@@ -93,6 +93,7 @@ function createRuntime(config, dependencies = {}) {
     logger,
     runtimeState,
     mediaMetadata,
+    mutateLibrary: (operation) => voiceSession.mutateLibrary(operation),
     controlHandlers: {
       play: discordAdapter.playWeb,
       stop: discordAdapter.stopWeb,

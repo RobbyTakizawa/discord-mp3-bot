@@ -8,7 +8,7 @@ This repository is a small Discord MP3 soundboard. Keep its supported core focus
 
 - `README.md` describes the user-facing setup, behavior, reverse-proxy contract, and known risks.
 - `ROADMAP.md` records the agreed stabilization order, target boundaries, and later product work. Roadmap items are not implemented behavior until the code and README are updated.
-- `index.js` composes the runtime; `config.js`, `catalog.js`, `media-metadata.js`, `discord-adapter.js`, `render.js`, and `web-app.js` provide testable boundaries.
+- `index.js` composes the runtime; `config.js`, `catalog.js`, `library-store.js`, `media-metadata.js`, `discord-adapter.js`, `render.js`, and `web-app.js` provide testable boundaries.
 - `package.json` and `package-lock.json` are the source of truth for Node dependencies.
 
 There are no database migrations or build system in the current repository. Tests use temporary filesystem fixtures under `test/`.
@@ -24,6 +24,7 @@ One Node.js process owns all runtime behavior:
 - `media-metadata.js` provides cached FFprobe durations keyed by path, size, and mtime with bounded concurrency; unknown durations are `null` and never break the panel.
 - Multer stages bounded uploads in `.discord-mp3-upload-staging/`; `upload-storage.js` validates and exclusively publishes them into the local `music/` tree.
 - Catalog functions in `catalog.js` rescan the filesystem synchronously when requested; durations are enriched asynchronously by `web-app.js`.
+- `library-store.js` owns folder creation, exclusive hard-link/unlink song moves, and one shared ordered session board. It atomically writes `music/.session-board.json`, including a pending move journal; startup and subsequent mutations recover interrupted moves. Invalid/unrecoverable metadata fails closed.
 - `web-app.js` constructs the Express application without listening; `runtime-preflight.js` checks FFmpeg, FFprobe, and Opus; `index.js` owns process startup and Discord login.
 - `operational-logger.js` emits concise JSON lifecycle and request events while omitting secret-named fields. Each HTTP response receives a generated request ID; request logs do not include query strings, credentials, cookies, or bodies.
 - `downtime-store.js` owns per-guild, per-user feat goals, dice rolls, undo history, and scoreboard snapshots. It writes `music/.downtime-progress.json` by atomic replacement; malformed data fails startup rather than resetting progress.
@@ -31,6 +32,10 @@ One Node.js process owns all runtime behavior:
 Runtime data is filesystem-only. `music/` is created at startup and ignored by Git. Queue, loop, and volume are in-memory only and reset on restart. There is no database, cloud storage, pause/resume, or per-guild player state.
 
 Downtime progress is persistent data within `music/`, so the existing music backup/restore archive must include `.downtime-progress.json`. Do not edit that file while the bot is running.
+
+Session pins and move recovery state persist in `music/.session-board.json`; back up/restore the complete matching music tree including both hidden metadata files. One process owns a library. Do not edit metadata or move files externally while running; panel moves preserve pin IDs/order, external moves do not. Moves require folders on the same filesystem.
+
+Back up only a settled journal (`pendingMove: null`); inode-based pending recovery must happen on the original filesystem before archiving. Recovery mutations share voice serialization and reject either path while playing/queued. The music root must not be a symlink.
 
 ## Current supported behavior contract
 
@@ -49,7 +54,11 @@ Downtime progress is persistent data within `music/`, so the existing music back
 - Queued files are revalidated for containment/existence at start; missing files are skipped without breaking playback.
 - Root MP3s appear under the logical `uncategorized` label but physically live directly in `music/`.
 - Categories are immediate subdirectories of `music/`; discovery does not recurse into deeper levels.
+- The panel creates immediate folders with the upload basename policy and reserves `uncategorized` for root. Empty folders are visible without changing Discord catalog output.
+- Single/bulk moves (max 20/request) preserve filenames, reject symlinks/existing destinations, and report per-song outcomes without undoing earlier successes. A destination referenced by an unavailable pin must be unpinned first. Checks run through `voiceSession.mutateLibrary`, reject playing/queued paths, and serialize against voice operations; play/enqueue revalidate paths inside serialization.
+- One shared Next Session board supports pin/unpin, up/down ordering, and confirmed clear without deleting audio. Pins (max 500) survive restarts and panel moves with stable IDs; missing files show unavailable. Session edits require the current revision; stale edits reject with `409`.
 - Only filenames ending in lowercase `.mp3` are cataloged.
+- Pin/move APIs use exact catalog identifiers. Panel play/enqueue/duration lookup prefers an exact catalog name before the optional extension alias, including double-extension filenames. Discord's suffix interpretation is unchanged.
 - `safeResolveMp3` must continue to prevent resolution outside `music/` for playback paths.
 - Uploads accept only `uncategorized` or an existing, real immediate category; category symlinks are rejected.
 - Upload basenames are NFC-normalized, conservatively constrained, limited to 100 characters, and published as lowercase `.mp3` filenames without overwriting duplicates.
@@ -81,7 +90,7 @@ The global session, unified stop paths, target movement, serialized operations, 
 
 The generated HTML now uses relative URLs, so the panel actions work at the direct Express root and beneath the `/discord/` prefix-stripping proxy.
 
-Express defines `/`, `/upload`, `/api/control`, `/api/playback`, and `/api/library`. The generated HTML uses relative URLs, so it works at the direct root and when a reverse proxy publishes `/discord/` and strips that prefix before forwarding requests to Express. Minimal unauthenticated `GET /healthz` and `GET /readyz` routes are intentional operational exceptions: liveness reports HTTP availability, while readiness requires completed Discord login plus a currently ready client.
+Express defines `/`, `/upload`, `/api/control`, `/api/playback`, `/api/library`, `/api/folders`, `/api/library/move`, and `/api/session`. Browser actions are relative for direct-root and prefix-stripping `/discord/` proxy use. Minimal unauthenticated `GET /healthz` and `GET /readyz` remain intentional operational exceptions. Move JSON is bounded to 64 KB for 20 Unicode identifiers; other JSON stays at 4 KB. All new mutations use Basic Auth, CSRF, and the existing mutation limiter.
 
 Do not casually change only one side of this contract. If routing is revised, update all form actions, fetch URLs, back links, Express routes, deployment examples, and tests together.
 
@@ -134,7 +143,9 @@ Do not weaken `safeResolveMp3`, Basic Auth coverage, or secret handling while ma
 - Web authentication is still one shared Basic Auth identity, and its process-local rate limits reset on restart.
 - Startup depends on system FFprobe and FFmpeg executables plus the Opus encoder; the process fails before login or listening when any preflight check fails.
 - After preflight, HTTP intentionally listens before Discord login so probes can observe startup. Readiness remains false until login succeeds, and login rejection closes the partial runtime with a failing exit status.
-- Categories cannot be created by the uploader; only the root and existing immediate real directories are valid targets.
+- The upload operation still targets only root/existing real immediate folders; a separate authenticated panel action creates folders. Folder/song rename/delete and per-DM boards are not implemented.
+- Library mutation routes and persistence have automated coverage and local fixture browser verification; live Discord and the production proxy have not been verified for this release. Existing Phase 9 voice gates remain outstanding.
+- The 2026-10-15 locked dependency audit reports existing transitive `proxy-addr` (critical) and `undici` (high) findings. The library feature does not change dependencies; review and patch before release. Express proxy trust remains disabled and rate limits use socket addresses.
 - Discord access controls and cooldowns exist but are disabled by default, so an unconfigured bot accepts supported commands from every visible user and guild.
 - The singleton player means one guild can interrupt another guild's playback.
 - An existing guild voice connection is reused without moving it to a newly requested channel.
@@ -210,6 +221,7 @@ Use a targeted manual checklist as applicable:
 - Web routes reject missing or invalid Basic Auth; `GET /api/playback` and `GET /api/library` require auth while `POST /api/control` also requires CSRF and mutation rate limiting.
 - `/healthz` reports HTTP liveness without authentication and `/readyz` tracks live Discord readiness.
 - Upload destinations remain inside `music/`.
+- Verify folder creation, empty folders, single/bulk moves, duplicate/busy rejection, persistent pin ordering/clearing, unavailable entries, and backup/restore including `.session-board.json`. Interrupted moves must recover safely, and malformed metadata must not silently reset pins.
 - `/discord/` proxy rewriting reaches the corresponding Express routes, including playback/library/control.
 - Web play/queue requires a human in voice when idle; web stop clears playback, queue, and loop.
 

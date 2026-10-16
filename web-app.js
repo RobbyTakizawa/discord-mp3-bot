@@ -5,6 +5,7 @@ const express = require("express");
 const multer = require("multer");
 
 const { renderControlPanel, renderUploadSuccess } = require("./render");
+const { createLibraryStore } = require("./library-store");
 const {
   DEFAULT_MAX_UPLOAD_BYTES,
   UploadError,
@@ -210,6 +211,8 @@ function createWebApp({
   rateLimitOptions = {},
   runtimeState,
   mediaMetadata = null,
+  libraryStore = createLibraryStore({ musicDir: catalog.musicDir }),
+  mutateLibrary = null,
   logger = console,
 }) {
   const app = express();
@@ -235,9 +238,15 @@ function createWebApp({
     ? mediaMetadata.getDurationMs.bind(mediaMetadata)
     : async () => null;
 
+  function resolvePanelSong(song) {
+    if (typeof song !== "string" || !song) return null;
+    // Prefer the exact catalog name (including names such as theme.mp3.mp3), retaining optional suffix compatibility.
+    return catalog.safeResolveMp3(`${song}.mp3`) || catalog.safeResolveMp3(song);
+  }
+
   async function resolveDurationMs(song) {
     try {
-      const filePath = catalog.safeResolveMp3(song);
+      const filePath = resolvePanelSong(song);
       if (!filePath) return null;
       const durationMs = await getDurationMs(filePath);
       return Number.isInteger(durationMs) && durationMs > 0 ? durationMs : null;
@@ -264,7 +273,8 @@ function createWebApp({
     return { ...raw, current, queue };
   }
 
-  async function buildLibrary() {
+  async function buildLibrary(attempt = 0) {
+    const revision = libraryStore.snapshot().revision;
     const structure = catalog.getMusicStructure();
     const entries = [];
     for (const [category, tracks] of Object.entries(structure)) {
@@ -273,13 +283,17 @@ function createWebApp({
         entries.push({ song, category });
       }
     }
-    return {
-      tracks: await Promise.all(entries.map(async (entry) => ({
-        song: entry.song,
-        category: entry.category,
-        durationMs: await resolveDurationMs(entry.song),
-      }))),
-    };
+    const tracks = await Promise.all(entries.map(async (entry) => ({
+      song: entry.song,
+      category: entry.category,
+      durationMs: await resolveDurationMs(entry.song),
+    })));
+    const session = libraryStore.snapshot();
+    if (revision !== session.revision) {
+      if (attempt < 2) return buildLibrary(attempt + 1);
+      throw new Error("Library kept changing during duration lookups; retry the read.");
+    }
+    return { categories: catalog.getCategories(), session, tracks };
   }
 
   function isNoVoiceTargetError(err) {
@@ -302,6 +316,8 @@ function createWebApp({
     });
   });
   app.use(express.urlencoded({ extended: false, limit: "4kb", parameterLimit: 10 }));
+  // Twenty bounded Unicode identifiers can exceed the smaller playback-control body limit.
+  app.use("/api/library/move", express.json({ limit: "64kb", strict: true }));
   app.use(express.json({ limit: "4kb", strict: true }));
   app.use((req, res, next) => {
     if (!config.webPass || hasValidBasicCredentials(config, req.headers.authorization || "")) {
@@ -321,6 +337,7 @@ function createWebApp({
     res.send(renderControlPanel({
       musicStructure: catalog.getMusicStructure(),
       categories: catalog.getCategories(),
+      session: libraryStore.snapshot(),
       csrfToken,
       nonce: res.locals.cspNonce,
     }));
@@ -356,6 +373,37 @@ function createWebApp({
     }
   });
 
+  function editLibrary(operation) {
+    if (typeof mutateLibrary !== "function") {
+      throw new UploadError(503, "Library changes are unavailable.", "LIBRARY_UNAVAILABLE");
+    }
+    return mutateLibrary(operation);
+  }
+
+  app.post("/api/folders", mutationLimiter, csrfProtection, async (req, res, next) => {
+    try {
+      const name = await editLibrary((busyPaths) => libraryStore.createFolder(req.body?.name, busyPaths));
+      return res.status(201).json({ message: `Created folder ${name}.`, name });
+    } catch (err) { return next(err); }
+  });
+
+  app.post("/api/session", mutationLimiter, csrfProtection, async (req, res, next) => {
+    try {
+      const session = await editLibrary((busyPaths) => libraryStore.editSession(req.body || {}, busyPaths));
+      return res.json({ message: "Session board saved.", session });
+    } catch (err) { return next(err); }
+  });
+
+  app.post("/api/library/move", mutationLimiter, csrfProtection, async (req, res, next) => {
+    try {
+      // Only the voice owner can hold this boundary across queued and in-progress playback changes.
+      const results = await editLibrary((busyPaths) => (
+        libraryStore.moveSongs(req.body?.songs, req.body?.category, busyPaths)
+      ));
+      return res.json({ results, session: libraryStore.snapshot() });
+    } catch (err) { return next(err); }
+  });
+
   app.get("/api/playback", async (req, res) => {
     try {
       if (typeof controlHandlers?.getSnapshot !== "function") {
@@ -383,7 +431,7 @@ function createWebApp({
 
       if (action === "play") {
         if (typeof song !== "string" || !song) return res.status(400).send("Missing song identifier.");
-        const filePath = catalog.safeResolveMp3(song);
+        const filePath = resolvePanelSong(song);
         if (!filePath) return res.status(404).send("File not found on server.");
         const result = await controlHandlers.play(song, filePath);
         const snapshot = typeof controlHandlers.getSnapshot === "function"
@@ -394,7 +442,7 @@ function createWebApp({
 
       if (action === "enqueue") {
         if (typeof song !== "string" || !song) return res.status(400).send("Missing song identifier.");
-        const filePath = catalog.safeResolveMp3(song);
+        const filePath = resolvePanelSong(song);
         if (!filePath) return res.status(404).send("File not found on server.");
         if (typeof controlHandlers.enqueue !== "function") return res.status(500).send("Failed to control playback.");
         try {

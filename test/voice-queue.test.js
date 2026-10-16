@@ -98,6 +98,45 @@ function createHarness(overrides = {}) {
   return { connections, createdResources, errors, logs, player, session };
 }
 
+test("library edits run behind playback operations and see current and queued file ownership", async () => {
+  let ready;
+  const gate = new Promise((resolve) => { ready = resolve; });
+  const { session } = createHarness({ entersState: () => gate });
+  const target = createTarget("guild", "channel");
+  const play = session.play({ ...target, song: "horn", filePath: "/music/horn.mp3" });
+  const queued = session.enqueue({ song: "rain", filePath: "/music/rain.mp3" });
+  let called = false;
+  const edit = session.mutateLibrary((busyPaths) => {
+    called = true;
+    assert.deepEqual(busyPaths, ["/music/horn.mp3", "/music/rain.mp3"]);
+    return "edited";
+  });
+  await Promise.resolve();
+  assert.equal(called, false);
+  ready();
+  await Promise.all([play, queued]);
+  assert.equal(await edit, "edited");
+  await session.stop();
+  await session.mutateLibrary((busyPaths) => assert.deepEqual(busyPaths, []));
+});
+
+test("play and enqueue revalidate paths after an earlier library edit", async (t) => {
+  const musicDir = fs.mkdtempSync(path.join(os.tmpdir(), "voice-library-race-"));
+  t.after(() => fs.rmSync(musicDir, { recursive: true, force: true }));
+  const filePath = path.join(musicDir, "horn.mp3");
+  fs.writeFileSync(filePath, "audio");
+  const { session, createdResources } = createHarness({ musicDir });
+  const target = createTarget("guild", "channel");
+  const edit = session.mutateLibrary(() => fs.unlinkSync(filePath));
+  const play = session.play({ ...target, song: "horn", filePath });
+  const enqueue = session.enqueue({ ...target, song: "horn", filePath });
+  await edit;
+  await assert.rejects(play, /no longer available/);
+  await assert.rejects(enqueue, /no longer available/);
+  assert.equal(createdResources.length, 0);
+  assert.deepEqual((await session.getSnapshot()).queue, []);
+});
+
 test("enqueue starts immediately when idle and queues when playing", async () => {
   const harness = createHarness();
   const target = createTarget("guild-a", "channel-a");

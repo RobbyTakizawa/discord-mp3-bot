@@ -52,7 +52,7 @@ The voice lifecycle is covered by fake-driven state-transition tests, including 
 ### Dependencies and runtime
 
 - The supported runtime is explicit at Node.js `>=22.12.0`, with `start` and real `test` package scripts.
-- Direct Discord dependencies are refreshed to `@discordjs/voice` 0.19.2 and `discord.js` 14.27.0; Multer was at 2.2.0 and is now resolved to 2.4.0 with transitive `qs` 6.16.0 via a non-force `npm audit fix` (`npm audit --omit=dev` clean).
+- Direct Discord dependencies are refreshed to `@discordjs/voice` 0.19.2 and `discord.js` 14.27.0; Multer resolves to 2.4.0 with transitive `qs` 6.16.0 after a non-force audit fix. That audit was clean at the time; the 2026-10-15 locked install reports existing transitive `proxy-addr` (critical) and `undici` (high) findings requiring review/patch before release. This feature leaves dependencies unchanged.
 - Redundant direct `prism-media` and native `@discordjs/opus` declarations were removed. The supported pure-JavaScript `opusscript` 0.0.x fallback was selected for this single-stream bot, avoiding the native downloader/build chain at the accepted cost of lower encoding performance.
 - Safe transitive updates cleared the production-tree audit on 2026-08-21. Advisory results are time-sensitive and must still be rerun for release and future dependency work.
 - Startup validates the token, web credentials, listener host/port, Discord authorization configuration, FFmpeg, FFprobe, and Opus encoder before login or listening.
@@ -355,6 +355,14 @@ Status: Implemented with automated tests only; live Discord/proxy verification o
 - Non-force dependency patch: Multer 2.2.0 to 2.4.0 with transitive `qs` 6.15.3 to 6.16.0 via `npm audit fix --omit=dev`; `npm audit --omit=dev` reports zero findings and the upload regression suite passes.
 - Automated coverage grew from 44 to 77 tests (queue/loop/volume/snapshot, durations/cache/dedup, playback/library/control validation including the no-target 409, CSRF/rate limiting, proxy routing, escaping, stale events, deleted files, concurrency, loop preservation, and ghost-queue rejection). Live non-production Discord testing of play, queue advance, loop, skip, volume, stop, target movement, last-human departure, reconnect, shutdown, plus direct and `/discord/` proxy checks and production CPU observation for `inlineVolume`, remain release gates.
 
+## Library organization and session preparation (2026-10-15)
+
+Status: Implemented locally. All 105 automated tests pass; desktop/mobile fixture browser flows pass at direct-root and prefix-mounted URLs. Not deployed.
+
+The library/session-board release adds authenticated folder creation, empty-folder display, search, single/bulk song moves (20 maximum), and one shared persistent Next Session board (500 maximum, manual order, no cue notes). `library-store.js` uses canonical real paths, symlink rejection, exclusive hard-link publication, atomic JSON metadata, and a pending-move journal with startup/mutation recovery. Moves preserve pin IDs/order and reject current/queued tracks through voice serialization. Session revisions reject stale browser edits. Metadata is `music/.session-board.json` and belongs in the complete offline music backup.
+
+Validation includes temporary-filesystem recovery/collision tests, route auth/CSRF/rate-limit/direct/proxy tests, serialized playback checks, and desktop/mobile browser flows using fixture songs and fake voice. Live Discord, real audio decoding, service restart persistence, production proxy verification, and existing Phase 9 voice gates remain outstanding; no production deployment is implied.
+
 ## Next steps after stabilization
 
 These are separate product improvements, not prerequisites for securing the current bot.
@@ -362,10 +370,10 @@ These are separate product improvements, not prerequisites for securing the curr
 1. **Slash commands and autocomplete.** Replace privileged message-content parsing with `/play`, `/stop`, `/list`, and track/category autocomplete.
 2. **Explicit web target selection.** Show available guilds and voice channels, require an operator choice, and display the current session and track.
 3. **Discord OAuth for the panel.** Replace a shared Basic Auth secret with Discord identity and guild/role authorization when the panel has multiple users.
-4. **Library administration.** Add authenticated delete, rename, category creation, duplicate replacement, search, and metadata display using the same storage and escaping rules. Durations are already displayed via the cached FFprobe boundary.
+4. **Library administration.** Folder creation, search, single/bulk moves, session pins, and cached durations are implemented. Delete, rename, duplicate replacement, named boards, individual DM identity, and cue notes remain candidates.
 5. **Playback controls.** Now-playing status, volume, loop-current, and a small queue are implemented. Remaining candidates are pause/resume, replay beyond loop-current, random selection, and per-guild targeting after session ownership is stable.
 6. **True multi-guild playback, if required.** Replace the global session with a guild-to-session map and require every web action to select a guild and channel.
-7. **Metadata persistence.** Introduce SQLite only when aliases, tags, favorites, playlists, uploader identity, or audit history require data beyond filenames.
+7. **Metadata persistence.** Downtime progress and shared session pins now use versioned JSON under `music/`. Consider SQLite when richer metadata, audit history, or concurrency warrants it.
 8. **Operational maturity.** Add container packaging, continuous integration, automated dependency updates, backup verification, metrics, and alerts.
 9. **Storage scaling.** Consider object storage or background media processing only if a local persistent volume no longer fits the workload.
 

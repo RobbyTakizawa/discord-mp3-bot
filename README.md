@@ -8,6 +8,8 @@ A small Discord soundboard bot that plays MP3 files from a local `music/` direct
 - Join the requesting user's voice channel and play a selected track.
 - Stop playback and disconnect the bot.
 - Group tracks into one level of category folders.
+- Create folders, search the library, and move one or up to 20 songs at a time from the web panel.
+- Prepare one shared, manually ordered **Next Session** board with persistent pins.
 - Upload MP3s through an HTTP Basic Auth-protected web panel.
 - Validate bounded uploads in a private staging area and reject unsafe or duplicate destinations.
 - Use the web panel to play a track in the first voice channel that contains a human user.
@@ -31,7 +33,7 @@ The behavior decisions for the stabilization work are frozen, as extended by the
 - Volume applies immediately to the current resource (via `inlineVolume`) and to future tracks, and persists in memory until restart.
 - The catalog remains filesystem-only: root tracks are labeled `uncategorized`, categories are one directory deep, and only lowercase `.mp3` filenames at those depths are discoverable and playable. Queued files are revalidated for containment and existence when they start; missing files are skipped.
 - Uploads reject an existing destination instead of overwriting it implicitly.
-- Every web route remains protected by Basic Auth behind HTTPS. Read-only `GET /api/playback` and `GET /api/library` require auth; all `POST /api/control` mutations require auth, CSRF, and the mutation rate limiter.
+- Every operator route remains protected by Basic Auth behind HTTPS. Read-only playback/library endpoints require auth; all control, upload, folder, move, and session mutations require auth, CSRF, and the shared mutation rate limiter. Minimal health/readiness probes are the intentional exceptions.
 - Browser actions use relative URLs so the panel works both at the direct Express root and through the `/discord/` prefix-stripping reverse proxy.
 - The playback commands remain `!help`, `!list`, `!play`, and `!stop`; downtime tracking adds separate Discord commands. Simultaneous multi-guild playback, nested catalogs, and remote URL ingestion remain out of scope.
 
@@ -47,6 +49,7 @@ The remaining deployment work and live verification gates are documented under *
 | `voice-session.js` | Serialized global ownership of the audio player, voice connection, target, current track/resource, queue, loop, volume, and playback snapshots. |
 | `config.js` | Environment configuration parsing and startup validation. |
 | `catalog.js` | Music discovery and containment-checked playback identifiers. |
+| `library-store.js` | Safe folder creation, exclusive song moves with recovery journal, and the persistent shared session board. |
 | `media-metadata.js` | Cached FFprobe duration lookups by path, size, and mtime with bounded concurrency. |
 | `render.js` | Escaped server-rendered control-panel HTML. |
 | `web-app.js` | Testable Express application, authentication, upload, library/playback, and control routes. |
@@ -137,6 +140,16 @@ This produces the playable identifiers `airhorn`, `players/level_up`, and `villa
 
 Catalog discovery only includes lowercase `.mp3` files at the root or directly inside a first-level category. Deeper nesting is not shown by `!list` or the web panel. Root tracks, categories, and category tracks are sorted deterministically. If one category cannot be read, it is logged and the remaining readable catalog is still returned. Filename matching follows the host filesystem's case-sensitivity rules.
 
+### Managing folders and preparing a session
+
+1. Use **New folder → Create Folder** in the web library. Empty folders appear immediately and become upload/move destinations. Names follow the upload basename rules (NFC, 100 characters, conservative characters, no reserved device names); `uncategorized` is reserved for the physical root. The upload section links to folder creation without discarding the chosen upload file.
+2. Use **Move…** beside a song, or select up to 20 checkboxes and choose **Move selected…**. Choose an existing destination, including Uncategorized. Moves preserve filenames and bytes, reject symlinks, and never overwrite. Songs already in the destination stay put. Bulk operations report each outcome; successful moves remain applied if another song conflicts.
+3. Stop a playing song or remove a queued song before moving it. Move checks share the voice controller's serialization with Discord and web playback. Moving changes the song's `!play` identifier to its new folder path.
+4. **Pin** adds a song to **Next Session**. The arrows arrange scene order; **Play Now** and **Queue** use the existing playback controls. Pins remain after playback and survive refreshes/restarts. **Unpin** and confirmed **Clear session** remove references only. The board is shared by everyone using the panel login, holds up to 500 songs, and has no individual DM accounts or cue notes.
+5. Search matches songs/folders. **Refresh library** reloads external changes. Missing pins stay visible as unavailable. Panel moves preserve pin IDs/order; external moves are not tracked. A stale session edit returns `409` and refreshes the board to protect another window's changes.
+
+Session data and any pending move journal live in `music/.session-board.json`, written with restrictive permissions and atomic replacement. Moves publish an exclusive hard link before removing the source, so folders must share a filesystem. A process interruption is recovered on startup or before the next library mutation. Unrecoverable/malformed metadata fails closed: preserve it and restore the matching complete music backup below instead of deleting the journal. Do not edit metadata or reorganize files externally while running. A destination referenced by an unavailable pin must be unpinned before moving another song to that path.
+
 ## Discord commands
 
 | Command | Behavior |
@@ -169,7 +182,12 @@ The Express server implements these authenticated operator routes:
 - `POST /upload` - stores an uploaded MP3.
 - `POST /api/control` - starts or stops playback, manages the queue, loop, and volume. Supported `action` values are `play` (Play Now, clears queue), `enqueue` (Add to Queue), `skip`, `remove` (with numeric `id`), `clearQueue`, `setLoop` (with boolean `enabled`), and `setVolume` (with integer `volume` 0–100). Successful mutations return `{ message, snapshot }`.
 - `GET /api/playback` - returns `{ snapshot }` with status, target names, current track plus elapsed/duration, queue with durations, volume, loop, and revision. No CSRF or mutation rate limit applies.
-- `GET /api/library` - returns `{ tracks: [{ song, category, durationMs }] }` with cached durations (`null` when unknown). No CSRF or mutation rate limit applies.
+- `GET /api/library` - returns `{ tracks: [{ song, category, durationMs }], categories, session: { revision, pins: [{ id, song, available }] } }`. Includes empty folders and cached durations (`null` when unknown); excludes absolute paths and the move journal. No CSRF or mutation rate limit applies.
+- `POST /api/folders` - accepts `{ name }` and creates one immediate folder; duplicates return `409`.
+- `POST /api/library/move` - accepts `{ songs, category }` (1–20 identifiers, bounded 64 KB JSON) and returns `{ results, session }`. Each result has `song`, `status` (`moved`, `unchanged`, or `error`), a message, and `to` when moved. Expected per-song failures return HTTP `200`; invalid batches/destinations reject before moving anything. Unexpected storage failures return `500`, may leave earlier songs moved, and preserve recovery state.
+- `POST /api/session` - accepts `action` (`pin`, `unpin`, `reorder`, `clear`) and current `revision`, plus `song` for pinning or pin `id` for unpin/reorder. Reorder uses `direction: "up"` or `"down"`. Returns `{ message, session }`; stale revisions return `409`.
+
+Pin/move requests use exact `song` values from the library API. Panel playback/duration lookups prefer an exact catalog name before the optional `.mp3` suffix alias, preserving the distinction between `theme.mp3` and `theme.mp3.mp3` files. Discord's existing optional-suffix interpretation remains unchanged.
 
 It also exposes two minimal unauthenticated operational probes so a local process manager or reverse proxy can observe startup without storing the panel password:
 
@@ -205,6 +223,10 @@ Opening `http://localhost:3000/` directly now keeps upload, control, and back-li
 Web playback searches all connected Discord servers and selects the first voice channel containing at least one non-bot member. A user must therefore join a voice channel before pressing **Play Now** or **Add to Queue** when the session is idle; queued requests stay in the current channel once playback has started. The panel displays the active guild/channel names, now-playing track with elapsed/total time, volume, loop state, and the pending queue. The web **Stop** action clears the same global session (including queue and loop) as Discord `!stop`. Durations are probed with FFprobe on demand and cached by path, size, and mtime; unknown durations appear as `?:??` without breaking the panel.
 
 ## Persistent storage, backup, and restore
+
+Archive and restore the entire `music/` tree, including hidden `.session-board.json` and `.downtime-progress.json`. Keep music and metadata from the same offline backup together; an interrupted move journal refers to that library's files. No database or additional persistent volume is required.
+
+Back up only a settled library (`pendingMove: null` if session metadata exists). Recover pending moves on the original filesystem before archiving; inode identities in an unfinished journal do not survive archive extraction. Restore the last known-good settled backup if recovery fails. Recovery during operation waits if either path is playing/queued. The music root must be a real directory or mounted volume, not a symlink.
 
 The runtime library is the repository's `music/` directory, so a persistent disk or volume must be mounted at that exact path before the service starts. Both `music/` and `.discord-mp3-upload-staging/` must be writable only by the service account. For the current EC2 layout, verify the real service user and repository path first; the example below uses `ec2-user` and `/home/ec2-user/discord-mp3-bot`:
 
@@ -278,7 +300,7 @@ If post-restore checks fail, stop only `discord-mp3-bot.service`, move the resto
 5. FFprobe must identify an MP3 audio stream, then FFmpeg decodes up to the first 30 seconds. Both checks share a ten-second timeout. A valid file is published without overwriting any existing destination; invalid, duplicate, oversized, failed, and aborted uploads are removed from staging.
 6. The catalog is rebuilt from disk on the next page load or `!list` command.
 
-Tracks and downtime progress live only on the local filesystem; there is no database, object storage, or automated backup process.
+Tracks, session pins, and downtime progress live only on the local filesystem; there is no database, object storage, or automated backup process.
 
 ## Current limitations and security notes
 
@@ -288,7 +310,9 @@ This repository is an early, single-process implementation. Keep these constrain
 - The panel uses one shared Basic Auth identity. Its failed-authentication and state-change rate limits are in memory, apply per connecting socket address, and reset when the process restarts. Users behind the same reverse proxy share one limit bucket.
 - Startup requires working system `ffprobe` and `ffmpeg` executables and a loadable Opus encoder. The process exits before Discord login or HTTP listening if any dependency is unavailable.
 - Voice encoding uses the supported pure-JavaScript `opusscript` fallback. It avoids the native module's downloader/build chain and is adequate for this single-stream bot, but it is slower than native `@discordjs/opus` and should be reconsidered if playback becomes CPU-constrained.
-- Uploads can target only the root or an existing immediate category; the panel does not create categories.
+- Uploads can target only the root or an existing immediate category; use the separate Create Folder action first. Folder/song renaming and deletion are not implemented.
+- Session pins are shared references; external moves do not update them. Moves require one filesystem and reject playing/queued songs and duplicate destinations. Operate only one bot process against a library.
+- The 2026-10-15 locked dependency audit reports two existing transitive findings: critical `proxy-addr` and high `undici`. No dependencies changed for library management. The panel uses socket addresses for limits and does not enable Express proxy trust; review and patch these findings before release rather than treating the earlier clean audit as current.
 - Discord command allowlists, controller-role checks, and cooldowns are disabled unless configured; the default deployment therefore permits commands from every user and server the bot can see.
 - Playback is intentionally global: a play request from another guild or channel moves and replaces the current session rather than creating simultaneous playback.
 - Queue, loop, and volume are in-memory only and disappear on restart; there is no persistence, pause/resume, shuffle, per-track repeat of queued items beyond loop-current, or simultaneous multi-guild playback.
@@ -310,3 +334,5 @@ npm test
 ```
 
 For behavior changes, manually verify `!list`, `!play`, `!stop`, authenticated upload, web Play Now, queue advance, loop, skip, volume, stop clearing queue/loop, and automatic voice disconnection in a non-production Discord server, plus direct and `/discord/` proxy behavior.
+
+Library tests also cover folder validation, symlinks, duplicate-safe moves, partial bulk outcomes, persistent pin identity/order, stale edits, unavailable files, interrupted-move recovery, auth/CSRF/rate limits, and direct/prefix-mounted routes. Before deploying, verify browser single/bulk moves, pin ordering/clearing, restart persistence, and playing/queued rejection. Fixture uploads and fake voice controls do not constitute real decoding or live Discord verification.

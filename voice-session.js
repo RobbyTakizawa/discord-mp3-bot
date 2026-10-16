@@ -395,6 +395,7 @@ function createVoiceSession({
     return serialize(async () => {
       if (closed) throw new Error("Voice session is shut down.");
       if (!guild || !channel || !filePath) throw new Error("Voice play requires a guild, channel, and file.");
+      if (!canPlayFile(filePath)) throw new Error("Song is no longer available. Refresh the library.");
 
       const trackSong = deriveSong(filePath, song);
       const entryIdForCreation = nextEntryId;
@@ -470,6 +471,7 @@ function createVoiceSession({
     return serialize(async () => {
       if (closed) throw new Error("Voice session is shut down.");
       if (!filePath || typeof song !== "string" || !song) throw new Error("Queue requires a song identifier and file.");
+      if (!canPlayFile(filePath)) throw new Error("Song is no longer available. Refresh the library.");
       if (queue.length >= MAX_QUEUE_ENTRIES) throw new Error("Queue is full.");
 
       if (currentResource) {
@@ -627,12 +629,21 @@ function createVoiceSession({
     return operationTail;
   }
 
+  function mutateLibrary(operation) {
+    return serialize(() => {
+      if (closed) throw new Error("Voice session is shut down.");
+      const busyPaths = [currentTrack?.filePath, ...queue.map((entry) => entry.filePath)].filter(Boolean);
+      return operation(busyPaths);
+    });
+  }
+
   return {
     clearQueue,
     enqueue,
     getSnapshot,
     getState,
     handleVoiceStateUpdate,
+    mutateLibrary,
     play,
     removeQueued,
     setLoop,
